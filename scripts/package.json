@@ -1,0 +1,12 @@
+{
+  "name": "accumu-seed-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Accumu v2 데모 계정 시딩 스크립트 전용 패키지 (scripts/seed-accounts.mjs). 프런트엔드(Vite) 앱과는 별개의 최소 의존성 패키지로 분리되어 있음 (service_role 키를 다루는 코드를 프런트 번들 의존성 트리와 섞지 않기 위함).",
+  "scripts": {
+    "seed": "node seed-accounts.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
