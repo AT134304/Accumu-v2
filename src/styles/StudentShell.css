@@ -1,0 +1,124 @@
+/* Accumu v2 — 학생 공통 셸 + 화면 공용 프리미티브
+   Accumu_prototype.html의 .nav/.bottomnav/.wrap/.bell/.overlay/.modal CSS 값 그대로 재사용.
+   (프로토타입은 .menu button/.bottomnav button이지만 여기선 라우팅 때문에 <a>(NavLink)라 선택자를 맞춰 조정) */
+
+/* ---------- brand mark ---------- */
+.logo { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
+.logo .word { font-weight: 800; font-size: 20px; letter-spacing: -.6px; color: var(--ink); }
+.logo .word b { color: var(--brand); }
+
+/* ---------- app shell ---------- */
+.nav {
+  position: sticky; top: 0; z-index: 50; height: 62px;
+  display: flex; align-items: center; gap: 24px;
+  padding: 0 clamp(16px, 4vw, 30px); background: rgba(255, 255, 255, .82);
+  backdrop-filter: blur(14px); border-bottom: 1px solid var(--line);
+}
+.nav .menu { display: flex; gap: 4px; margin-left: 10px; }
+.nav .menu a {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 14px; border-radius: 9px; font-size: 14.5px; font-weight: 600;
+  color: var(--muted); text-decoration: none; transition: .18s;
+}
+.nav .menu a .isvg { color: var(--muted); transition: .18s; }
+.nav .menu a:hover { color: var(--ink); background: var(--bg2); }
+.nav .menu a:hover .isvg { color: var(--ink2); }
+.nav .menu a.on { color: var(--brand-dk); background: var(--brand-soft); }
+.nav .menu a.on .isvg { color: var(--brand); }
+.nav .spacer { flex: 1; }
+.nav .me {
+  display: flex; align-items: center; gap: 9px; padding: 5px 7px 5px 13px;
+  border: 1px solid var(--line); border-radius: 30px; background: #fff;
+}
+/* 포인트 — 나브 우측 구석에 작게/절제 (절대 원칙 4) */
+.nav .me .pts { display: flex; align-items: center; gap: 5px; font-weight: 800; color: var(--amber); font-size: 13.5px; }
+.nav .me .pts em { color: var(--muted); font-weight: 600; font-style: normal; }
+/* 아바타 — 정적 이니셜. 레벨/성장 요소 아님 */
+.nav .me .av {
+  width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--ink); color: #fff; font-weight: 700; font-size: 13px;
+}
+
+.bell { position: relative; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; color: var(--ink2); transition: .15s; }
+.bell:hover { background: var(--bg2); }
+
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: clamp(22px, 4vw, 34px) clamp(16px, 4vw, 30px) 80px; }
+
+/* bottom tab (mobile) */
+.bottomnav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: none;
+  background: rgba(255, 255, 255, .94); backdrop-filter: blur(14px); border-top: 1px solid var(--line);
+  padding: 7px 6px calc(7px + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(4, 1fr);
+}
+.bottomnav a {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 6px 0; color: var(--muted); font-size: 11px; font-weight: 600; text-decoration: none;
+}
+.bottomnav a .isvg { color: var(--muted); }
+.bottomnav a.on { color: var(--brand-dk); }
+.bottomnav a.on .isvg { color: var(--brand); }
+
+/* 프로토타입은 .screen/.screen.on 토글이지만, React는 라우트별로 하나만 마운트되므로 진입 애니메이션만 남긴다. */
+.screen { animation: fade .4s ease both; }
+@keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ---------- 화면 공용 프리미티브 ---------- */
+.eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--brand-dk); margin-bottom: 10px; }
+h2.sec { font-size: clamp(20px, 3.4vw, 23px); font-weight: 800; letter-spacing: -.6px; }
+.sec-sub { color: var(--muted); font-size: 14.5px; margin-top: 4px; }
+.sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.empty { text-align: center; padding: 38px 20px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+
+/* ---------- modal (알림/캘린더 빈 상태 팝업 — 확정 C) ---------- */
+.overlay {
+  position: fixed; inset: 0; z-index: 200; background: rgba(18, 26, 46, .5);
+  backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center;
+  padding: clamp(12px, 4vw, 24px); animation: fade .2s both;
+}
+.modal {
+  position: relative; /* 프로토타입은 .mthumb가 기준이었지만, 썸네일 없는 팝업에서도 .mclose를 앵커하기 위해 */
+  background: #fff; border-radius: 20px; width: 460px; max-width: 100%; max-height: 90vh;
+  overflow: auto; box-shadow: var(--shadow-lg); animation: pop .26s cubic-bezier(.2, .8, .3, 1) both;
+}
+@keyframes pop { from { opacity: 0; transform: scale(.94) translateY(10px); } to { opacity: 1; transform: none; } }
+.modal .mclose {
+  position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 50%;
+  background: var(--bg); display: grid; place-items: center; color: var(--ink2); z-index: 1;
+}
+.modal .mclose:hover { background: var(--bg2); }
+.modal .mbody { padding: 22px 24px 24px; }
+.modal h3 { font-size: 21px; font-weight: 800; letter-spacing: -.5px; }
+
+.calhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.cal-today { font-size: 12.5px; font-weight: 700; color: var(--brand-dk); }
+
+/* ---------- placeholder 화면 ---------- */
+.ph-panel {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--shadow); padding: 42px 24px; text-align: center;
+}
+.ph-panel .ph-ic { width: 44px; height: 44px; border-radius: 12px; background: var(--brand-soft); display: grid; place-items: center; margin: 0 auto 13px; }
+.ph-panel h3 { font-size: 16.5px; font-weight: 800; letter-spacing: -.3px; }
+.ph-panel p { font-size: 13.5px; color: var(--muted); margin-top: 6px; }
+.ph-meta { font-size: 13px; color: var(--ink2); font-weight: 600; margin-top: 18px; }
+.ph-logout {
+  margin-top: 12px; height: 42px; padding: 0 22px; border-radius: 11px;
+  background: var(--ink); color: #fff; font-weight: 700; font-size: 14px; transition: .16s;
+}
+.ph-logout:hover:not(:disabled) { background: var(--brand); }
+.ph-logout:disabled { opacity: .65; cursor: not-allowed; }
+
+/* ============ RESPONSIVE (CLAUDE.md 8장: 980/768/600/430) ============ */
+@media (max-width: 768px) {
+  .nav .menu { display: none; }
+  .bottomnav { display: grid; }
+  .wrap { padding-bottom: 86px; }
+}
+@media (max-width: 600px) {
+  .nav .me .pts em { display: none; }
+}
+@media (max-width: 430px) {
+  .nav { gap: 10px; }
+  .logo .word { font-size: 18px; }
+}

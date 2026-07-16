@@ -43,6 +43,15 @@ input { font-family: inherit; }
 ::selection { background: var(--brand-soft); }
 img, svg { display: block; }
 
+/* duotone 아이콘 베이스 (Accumu_prototype.html .isvg). 크기는 Icon 컴포넌트가 width/height로 지정한다.
+   fill:currentColor라 부모 color 또는 Icon의 color prop으로 색이 결정된다. */
+.isvg { display: inline-block; vertical-align: middle; flex: none; color: inherit; fill: currentColor; }
+
+/* 프로토타입 458줄 — 모션 최소화 설정 존중 (stackviz grow 애니메이션 등) */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
 .route-loading {
   min-height: 100vh;
   display: grid;

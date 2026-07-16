@@ -1,7 +1,7 @@
 # ADR 0002: profiles/mentor_students 스키마 및 로그인 인증 흐름 확정
 
 ## 상태
-확정
+확정 (2026-07-16: `career_interest` 컬럼 타입만 ADR 0003으로 부분 수정됨 — 아래 profiles 절 참고)
 
 ## 배경
 `docs/specs/auth-login.md`에서 학생 로그인은 학번+이름+비밀번호 3가지가 모두 일치해야 성공하도록, 관리자 로그인은 코드+비밀번호 2가지로 확정됐다. CLAUDE.md 5장은 `profiles`, `mentor_students` 테이블의 필드를 정의하고 있으나 아직 실제 SQL로 구체화되지 않았다. 이 ADR은 두 테이블의 실제 컬럼/제약, "이름까지 일치해야 로그인 성공" 검증을 어느 레이어에서 수행할지, virtual email 변환 규칙, 에러 메시지 분기, 데모 계정 시딩 방식을 확정한다.
@@ -10,6 +10,9 @@
 전체 SQL은 `docs/db/schema.sql`. 요약:
 
 ### profiles
+
+> **2026-07-16 갱신 (ADR 0003)**: 아래 `career_interest text`는 **`career_track` enum으로 좁혀졌다** (학생 홈의 계열 매칭 추천이 성립하려면 `programs.career_track`과 값 공간이 같아야 하기 때문). nullable은 유지된다. 이 컬럼 타입 1건 외에 이 ADR의 나머지 결정(가상 이메일 규칙, 로그인 검증 흐름, RLS)은 전부 그대로 유효하다 — supersede가 아니라 부분 수정이다. 현재 스키마는 `docs/db/schema.sql`, 근거는 `docs/adr/0003-programs-schema-and-career-track-taxonomy.md` 참고.
+
 - `id uuid primary key references auth.users(id) on delete cascade` — Supabase Auth 계정과 1:1
 - `role user_role not null` (enum: `student` / `admin`)
 - `code text not null unique` — 학번(`10718`) 또는 관리자코드(`ADM-0001`). **원본 케이싱 그대로 저장** (표시용)
@@ -72,6 +75,8 @@ loginAdmin({ code, password }):
 3. 학생 5명의 `user.id`를 모아, 관리자 `user.id` 1개와 짝지어 `mentor_students`에 5행 insert (관리자 1명이 학생 5명 전원 담당)
 4. 재실행 안전성은 이번 스코프 필수 아님 — 신규 Supabase 프로젝트에 1회 실행 전제. 재실행 시 중복 이메일 에러로 중단되는 것을 기본 동작으로 두고, "이미 있으면 skip" 방어 로직 추가 여부는 backend-agent 재량 (과설계 방지 차원에서 필수 요구 아님으로 명시).
 5. 저장 위치: `scripts/seed-accounts.mjs` (ADR 0001 폴더 구조와 일치)
+
+> **2026-07-16 갱신 (ADR 0003)**: 위 2번의 profiles insert에 `career_interest`가 추가된다. 앱에 계열 선택 UI가 없고(마이페이지 스펙) `profiles`에 update 정책도 없어, 시딩이 이 값의 **유일한 입력 경로**이기 때문이다. 값 배정은 ADR 0003 "시드 설계" 참고.
 
 ## RLS/권한 영향
 - `profiles`: RLS 활성화, select 정책은 **본인 행만**(`auth.uid() = id`, 정책명 `profiles_select_own`) — 학생이 다른 학생의 이름/포인트/진로 관심사 등을 절대 볼 수 없다. 로그인 시 role/name 대조에 필요한 최소 권한만 부여했다.
