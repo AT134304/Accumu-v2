@@ -11,6 +11,7 @@ import Icon from '../components/Icon';
 import StackViz from '../components/student/StackViz';
 import ProgramCard from '../components/student/ProgramCard';
 import { fetchRecommendedPrograms } from '../lib/programService';
+import { fetchCompletedActivities } from '../lib/participationService';
 import '../styles/StudentHome.css';
 
 export default function StudentHomePage() {
@@ -19,6 +20,8 @@ export default function StudentHomePage() {
 
   const [programs, setPrograms] = useState([]);
   const [state, setState] = useState('loading'); // 'loading' | 'ready' | 'error'
+  // 마일스톤 스택 데이터 (확정 B-1). 추천 조회와 독립적으로 실패해도 홈 전체가 죽지 않아야 한다.
+  const [completed, setCompleted] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +46,26 @@ export default function StudentHomePage() {
       cancelled = true;
     };
   }, [profile]);
+
+  // 마일스톤 스택 — 완료된 활동만 (participations_select_own 으로 조회. 새 RLS 정책 0개)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const rows = await fetchCompletedActivities();
+        if (!cancelled) setCompleted(rows);
+      } catch (err) {
+        // 마이그레이션 미적용 등. 스택은 빈 상태로 두고 홈의 나머지는 그대로 뜬다.
+        console.warn('[StudentHome] 완료 활동 조회 실패 — 마일스톤을 빈 상태로 둡니다:', err);
+        if (!cancelled) setCompleted([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 확정 B: 카드/전체 보기 클릭 -> 프로그램 선택 화면 경로로 라우팅 (대상은 아직 placeholder).
   const goPrograms = () => navigate('/student/programs');
@@ -80,7 +103,7 @@ export default function StudentHomePage() {
             </button>
           </div>
         </div>
-        <StackViz />
+        <StackViz completed={completed} />
       </div>
 
       {/* ===== 개요 카드 3종 — 포인트(amber)는 3장 중 1장으로만 (원칙 4) ===== */}

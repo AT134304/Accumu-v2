@@ -38,18 +38,25 @@ export function monthTitle(base = new Date()) {
 }
 
 /**
- * 실제 오늘 기준 최근 count개월 캡션. 가장 오른쪽(마지막)이 '이번 달'.
- * 예: 2026-07 기준 -> ['3월','4월','5월','6월','이번 달']
+ * 실제 오늘 기준 최근 count개월. `[{ key: 'YYYY-MM', caption: '3월'|'이번 달' }]` (마지막이 이번 달).
  *
- * 프로토타입 buildStack()(854줄)의 ['3월','4월','5월','6월','이번 달']은
- * TODAY_ISO='2026-07-02' 고정 전제의 하드코딩이라 그대로 쓰지 않는다 (스펙 확정 G).
- * Date 생성자가 month 음수를 자동으로 연도 이월 처리하므로 1~2월에도 안전하다.
+ * 마일스톤 스택(StackViz)이 월 버킷을 만들 때 쓴다. 버킷 키는 programs.date 에서 뽑은 monthKey 와 맞춘다
+ * (ADR 0005 결정 5: 월 판정 기준은 exit_at 이 아니라 programs.date = "활동이 일어난 달").
+ * 캡션은 항상 실제 오늘 기준으로 계산한다 — 하드코딩 금지 (CLAUDE.md 9장).
  */
-export function recentMonthCaptions(count = 5, base = new Date()) {
-  const caps = [];
+export function recentMonths(count = 5, base = new Date()) {
+  const out = [];
   for (let i = count - 1; i >= 0; i--) {
     const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
-    caps.push(i === 0 ? '이번 달' : `${d.getMonth() + 1}월`);
+    out.push({
+      key: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`,
+      caption: i === 0 ? '이번 달' : `${d.getMonth() + 1}월`,
+    });
   }
-  return caps;
+  return out;
+}
+
+/** 'YYYY-MM-DD' -> 'YYYY-MM'. 문자열 절단이라 타임존 변환이 끼어들 자리가 없다. */
+export function monthKey(iso) {
+  return typeof iso === 'string' && iso.length >= 7 ? iso.slice(0, 7) : '';
 }

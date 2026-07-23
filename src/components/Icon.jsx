@@ -256,6 +256,71 @@ const ICONS = {
       </>
     ),
   },
+  // 프로토타입 스프라이트 501줄 — QR 코드 (마이페이지 진입 버튼 / 관리자 스캔 메뉴)
+  'ic-qr': {
+    content: (
+      <>
+        <rect x="3" y="3" width="7" height="7" rx="1.6" />
+        <rect x="14" y="3" width="7" height="7" rx="1.6" opacity=".34" />
+        <rect x="3" y="14" width="7" height="7" rx="1.6" opacity=".34" />
+        <rect x="14" y="14" width="3" height="3" />
+        <rect x="18.2" y="14" width="2.8" height="3" />
+        <rect x="14" y="18.2" width="3" height="2.8" />
+        <rect x="18.2" y="18.2" width="2.8" height="2.8" opacity=".5" />
+      </>
+    ),
+  },
+  // 관리자 스캔 화면 — 카메라. (신규: 프로토타입에 스캐너 화면이 없어 대응 심볼이 없다)
+  'ic-camera': {
+    content: (
+      <>
+        <path opacity=".34" d="M3 8.6A2.6 2.6 0 0 1 5.6 6h1.8l1.3-2.2h5.6L15.6 6h2.8A2.6 2.6 0 0 1 21 8.6v8.8A2.6 2.6 0 0 1 18.4 20H5.6A2.6 2.6 0 0 1 3 17.4V8.6z" />
+        <circle cx="12" cy="13" r="4" />
+        <circle cx="12" cy="13" r="1.8" fill="#fff" opacity=".9" />
+      </>
+    ),
+  },
+  // 관리자 스캔 화면 — 거부/기술 오류 안내
+  'ic-alert': {
+    content: (
+      <>
+        <circle cx="12" cy="12" r="9" opacity=".34" />
+        <rect x="10.9" y="6.6" width="2.2" height="7.4" rx="1.1" />
+        <circle cx="12" cy="16.8" r="1.4" />
+      </>
+    ),
+  },
+  // 재발급 / 다시 시도
+  'ic-refresh': {
+    content: (
+      <>
+        <path
+          d="M20 12a8 8 0 1 1-2.4-5.7"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.1"
+          strokeLinecap="round"
+        />
+        <path d="M20.4 3.6v5.2h-5.2z" />
+      </>
+    ),
+  },
+  // 관리자 셸 — 로그아웃
+  'ic-logout': {
+    content: (
+      <>
+        <path opacity=".34" d="M4 5.6A2.6 2.6 0 0 1 6.6 3h4.8v18H6.6A2.6 2.6 0 0 1 4 18.4V5.6z" />
+        <path
+          d="M14.4 8.4 18 12l-3.6 3.6M17.4 12H9.6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.1"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </>
+    ),
+  },
   // 프로토타입 1358줄 — 토스트 아이콘.
   // [이모지 금지] 프로토타입 toast()는 체크마크 이모지 문자를 넘겼지만 CLAUDE.md 8장 위반이라 duotone SVG로 대체한다.
   'ic-check': {

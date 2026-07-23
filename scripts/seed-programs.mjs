@@ -130,6 +130,10 @@ function dateFromToday(offsetDays) {
 //     (미게시면 is_published 필터에 먼저 걸려서 "지난 날짜 제외" 를 검증하지 못한다).
 //   - "교내 UCC 공모전" = 유일한 미게시 행. 날짜는 미래여야 한다
 //     (과거면 날짜 필터에 먼저 걸려서 "미게시 제외" 를 검증하지 못한다).
+//   - "또래 멘토링 프로그램"(het, 교내) + "지역 연계 진로 박람회"(eet, 교외) = dayOffset 0 = 오늘 (ADR 0005 결정 8-1).
+//     관리자 홈의 "오늘 진행 프로그램" 이 항상 교내 1 + 교외 1 로 채워지게 하는 fixture 다.
+//     [행을 추가하지 않고 기존 2건의 날짜를 옮긴 것이다] 2건을 추가하면 22건이 되어 확정 F(16~20)와
+//     아래 assertSeedInvariants() 의 상한 검사에 걸린다. 관측 결과는 동일하다.
 // ---------------------------------------------------------------------------
 const DEMO_PROGRAMS = [
   // --- 교내: 방과후 (hbk) ---
@@ -260,10 +264,13 @@ const DEMO_PROGRAMS = [
 
   // --- 교내: 기타 (het) ---
   {
+    // [fixture] 오늘 진행 프로그램 (교내) — ADR 0005 결정 8-1. 관리자 홈 "오늘 진행 프로그램" 이 항상
+    //   비지 않게 하려고 dayOffset 2 -> 0 으로 옮겼다(행을 추가하지 않는다 — 총 20건 = 확정 F 유지).
+    //   교외 짝은 아래 "지역 연계 진로 박람회"(eet). 아래 assertSeedInvariants() 가 이 쌍을 매 실행마다 검증한다.
     category: 'het',
     title: '또래 멘토링 프로그램',
     org: '상담부',
-    dayOffset: 2,
+    dayOffset: 0,
     time: '협의',
     points: 200,
     status: 'open',
@@ -398,10 +405,11 @@ const DEMO_PROGRAMS = [
     description: '관심 전공의 수업을 미리 체험해보는 진로 탐색 프로그램.',
   },
   {
+    // [fixture] 오늘 진행 프로그램 (교외) — ADR 0005 결정 8-1. dayOffset 4 -> 0 (교내 짝: "또래 멘토링 프로그램").
     category: 'eet',
     title: '지역 연계 진로 박람회',
     org: 'OO교육지원청',
-    dayOffset: 4,
+    dayOffset: 0,
     time: '10:00–16:00',
     points: 400,
     status: 'open',
@@ -465,6 +473,12 @@ function assertSeedInvariants() {
   const primaryMatches = publishedFuture.filter((p) => p.career_track === PRIMARY_DEMO_TRACK);
   const usedCategories = new Set(rows.map((p) => p.category));
 
+  // ADR 0005 결정 8-2: 관리자 홈 "오늘 진행 프로그램" fixture.
+  // 교내/교외 판정은 카테고리 첫 글자로 한다(h=교내, e=교외 — DB에 그룹 컬럼을 두지 않기로 한 ADR 0003 그대로).
+  const todayPrograms = rows.filter((p) => p.is_published && p.date === today);
+  const todayOnCampus = todayPrograms.filter((p) => p.category[0] === 'h');
+  const todayOffCampus = todayPrograms.filter((p) => p.category[0] === 'e');
+
   const problems = [];
 
   // 확정 F: 16~20개
@@ -513,6 +527,19 @@ function assertSeedInvariants() {
     );
   }
 
+  // ADR 0005 결정 8-2: 오늘(dayOffset=0) 프로그램이 교내 1건 이상 + 교외 1건 이상.
+  // 없으면 관리자 홈이 항상 빈 상태가 되는데, 그건 화면 버그가 아니라 시드가 조용히 깨진 것이다.
+  if (todayOnCampus.length < 1) {
+    problems.push(
+      '오늘 날짜(dayOffset=0) 교내(category h*) 게시 프로그램이 없음 — 관리자 홈 "오늘 진행 프로그램" 이 비게 됨 (ADR 0005 결정 8-2)'
+    );
+  }
+  if (todayOffCampus.length < 1) {
+    problems.push(
+      '오늘 날짜(dayOffset=0) 교외(category e*) 게시 프로그램이 없음 — 관리자 홈 "오늘 진행 프로그램" 이 비게 됨 (ADR 0005 결정 8-2)'
+    );
+  }
+
   for (const p of rows) {
     // CLAUDE.md 7장 포인트 규칙 (DB CHECK programs_points_rule 과 동일 조건)
     if (p.points < 150 || p.points > 3000 || p.points % 10 !== 0) {
@@ -539,8 +566,12 @@ function assertSeedInvariants() {
   console.log(`[검증] 카테고리 ${usedCategories.size}/8종 등장`);
   console.log(`[검증] 주 데모 계정(10718) 계열 '${PRIMARY_DEMO_TRACK}' 일치 + 게시 + 미래: ${primaryMatches.length}건`);
   console.log(`[검증] 포인트 분포: 150~700P ${lowBand}건 / 2000~3000P ${highBand}건 (CLAUDE.md 7장)`);
+  console.log(
+    `[검증] 오늘 진행 프로그램 ${todayPrograms.length}건 (교내 ${todayOnCampus.length} / 교외 ${todayOffCampus.length}) — ` +
+      `관리자 홈 fixture (ADR 0005): ${todayPrograms.map((p) => p.title).join(', ')}`
+  );
 
-  return { today, publishedFuture, unpublished, past, primaryMatches };
+  return { today, publishedFuture, unpublished, past, primaryMatches, todayPrograms };
 }
 
 async function main() {

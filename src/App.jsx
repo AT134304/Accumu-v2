@@ -1,14 +1,21 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './routes/ProtectedRoute';
 import RootRedirect from './routes/RootRedirect';
 import StudentLayout from './routes/StudentLayout';
+import AdminLayout from './routes/AdminLayout';
 import LoginPage from './pages/LoginPage';
 import StudentHomePage from './pages/StudentHomePage';
 import StudentProgramsPage from './pages/StudentProgramsPage';
 import StudentArchivePage from './pages/StudentArchivePage';
 import StudentMyPage from './pages/StudentMyPage';
 import AdminHomePage from './pages/AdminHomePage';
+import AdminPlaceholderPage from './pages/AdminPlaceholderPage';
+
+// 카메라 스캔 라이브러리(html5-qrcode)가 무거워 학생 번들에 섞이지 않도록 이 라우트만 분할한다.
+// 학생은 QR을 "표시"만 하므로(qrcode.react) 스캐너 코드를 받을 이유가 없다.
+const AdminScanPage = lazy(() => import('./pages/AdminScanPage'));
 
 export default function App() {
   return (
@@ -35,14 +42,49 @@ export default function App() {
             <Route path="mypage" element={<StudentMyPage />} />
           </Route>
 
+          {/* 관리자 화면 — ProtectedRoute(role="admin") 안쪽에서만 관리자 셸이 렌더된다.
+              /admin/* 전체가 한 번의 role 검사를 공유한다 (학생 라우트와 같은 구조).
+              프로그램 관리 / 담당 학생은 2단계 구현분이라 placeholder 화면으로 연결한다(빈 링크 아님). */}
           <Route
             path="/admin"
             element={
               <ProtectedRoute role="admin">
-                <AdminHomePage />
+                <AdminLayout />
               </ProtectedRoute>
             }
-          />
+          >
+            <Route index element={<AdminHomePage />} />
+            <Route
+              path="scan"
+              element={
+                <Suspense fallback={<div className="route-loading">스캔 화면을 불러오는 중…</div>}>
+                  <AdminScanPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="programs"
+              element={
+                <AdminPlaceholderPage
+                  eyebrow="Programs"
+                  title="프로그램 관리"
+                  sub="프로그램을 올리고, 내리고, 수정합니다"
+                  note="프로그램 등록·게시중단·수정은 다음 단계에서 구현됩니다."
+                />
+              }
+            />
+            <Route
+              path="students"
+              element={
+                <AdminPlaceholderPage
+                  eyebrow="Students"
+                  title="담당 학생"
+                  sub="담당 학생의 활동 아카이브를 확인합니다"
+                  note="담당 학생 아카이브 조회와 PDF 확인은 다음 단계에서 구현됩니다."
+                />
+              }
+            />
+          </Route>
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </AuthProvider>

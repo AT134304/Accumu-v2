@@ -1,0 +1,161 @@
+/* Accumu v2 — 관리자 화면 (셸 + 홈 + QR 스캔)
+   공통 시각 언어(.nav / .wrap / .bottomnav / .screen / .empty)는 StudentShell.css 가 소유한다.
+   이 파일에는 관리자 화면에만 있는 것만 둔다.
+
+   [색 규칙] 브랜드는 blue 계열. 초록 계열 금지. 입장 = brand / 퇴장 = indigo / 거부 = rose /
+   포인트 = amber(스캔 결과 한 줄에서만). 관리자 화면에 포인트 UI를 더 만들지 않는다(원칙 4). */
+
+/* ---------- 셸 ---------- */
+.adminbadge {
+  margin-left: 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .3px;
+  padding: 3px 8px; border-radius: 20px; background: var(--ink); color: #fff;
+}
+.nav .me .adminname {
+  display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25;
+  font-size: 13.5px; font-weight: 700; color: var(--ink2);
+}
+.nav .me .adminname em { font-size: 11px; font-weight: 600; font-style: normal; color: var(--muted); }
+.logoutbtn { margin-left: 2px; }
+
+.sec.sm { font-size: 18px; }
+
+/* ---------- 관리자 홈 목록 ---------- */
+.adm-scanall {
+  display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 16px; border-radius: 11px;
+  background: var(--brand); color: #fff; font-weight: 700; font-size: 13.5px; transition: .16s;
+}
+.adm-scanall:hover { background: var(--brand-dk); }
+
+.adm-list { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: 4px 18px; }
+.adm-list.muted { box-shadow: none; background: transparent; }
+.adm-row { display: flex; align-items: center; gap: 13px; padding: 14px 0; border-top: 1px solid var(--line); }
+.adm-row:first-child { border-top: none; }
+.adm-row .ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; flex-shrink: 0; }
+.adm-row .info { flex: 1; min-width: 0; }
+.adm-row .info h5 { font-size: 14.5px; font-weight: 700; letter-spacing: -.2px; }
+.adm-row .info .m { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.adm-row .pt { font-size: 13px; font-weight: 800; color: var(--amber); white-space: nowrap; }
+.adm-scan {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 9px;
+  background: var(--brand); color: #fff; font-weight: 700; font-size: 12.5px; transition: .15s; white-space: nowrap;
+}
+.adm-scan:hover { background: var(--brand-dk); }
+
+/* ---------- QR 스캔 화면 ---------- */
+.scan-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 20px; align-items: start; }
+
+.scan-cam, .scan-result > .rpanel, .scan-result > .manual {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow);
+}
+.scan-cam { padding: 16px 18px 18px; }
+.camhead { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; margin-bottom: 12px; }
+.camhead .live {
+  margin-left: auto; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px;
+  background: var(--brand-soft); color: var(--brand-dk);
+}
+
+.camview {
+  position: relative; border-radius: 14px; overflow: hidden; background: var(--ink);
+  min-height: 260px; display: grid; place-items: center;
+}
+.camview .reader { width: 100%; }
+.camview .reader video { width: 100% !important; height: auto !important; display: block; }
+/* 스캔 프레임 — html5-qrcode 가 자체 하이라이트를 그리지 않는 경우를 위한 정적 가이드 */
+.camview .reader.on::after {
+  content: ''; position: absolute; inset: 50% auto auto 50%; width: 210px; height: 210px;
+  transform: translate(-50%, -50%); border: 2px solid rgba(255, 255, 255, .85); border-radius: 14px;
+  box-shadow: 0 0 0 2000px rgba(22, 33, 62, .28); pointer-events: none;
+}
+.camoverlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; text-align: center; padding: 24px; background: var(--ink); color: #fff;
+}
+.camoverlay .t { font-size: 15px; font-weight: 800; letter-spacing: -.3px; }
+.camoverlay .d { font-size: 12.5px; color: #C3CCDE; line-height: 1.55; max-width: 330px; }
+.camoverlay.err .t { color: #FFC9D1; }
+.camoverlay .retry {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; height: 38px; padding: 0 16px;
+  border-radius: 10px; background: var(--brand); color: #fff; font-weight: 700; font-size: 13px; transition: .16s;
+}
+.camoverlay .retry:hover { background: var(--brand-dk); }
+
+.camhint { margin-top: 12px; font-size: 12.5px; color: var(--muted); text-align: center; }
+.envnote {
+  margin-top: 12px; padding: 11px 13px; border-radius: 11px; background: var(--bg);
+  border: 1px solid var(--line); font-size: 11.5px; color: var(--muted); line-height: 1.6;
+}
+.envnote b { color: var(--ink2); }
+.envnote code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--brand-dk); }
+
+/* ---------- 결과 패널 ---------- */
+.scan-result { display: flex; flex-direction: column; gap: 14px; }
+.rpanel { padding: 22px 20px; min-height: 200px; display: flex; flex-direction: column; justify-content: center; }
+.rpanel .tag {
+  display: inline-flex; align-items: center; gap: 5px; align-self: flex-start;
+  font-size: 11.5px; font-weight: 800; padding: 5px 11px; border-radius: 20px; margin-bottom: 12px;
+}
+.rpanel .t { font-size: 20px; font-weight: 800; letter-spacing: -.6px; }
+.rpanel .who { font-size: 14px; font-weight: 700; color: var(--ink2); margin-top: 7px; }
+.rpanel .d { font-size: 12.5px; color: var(--muted); margin-top: 6px; line-height: 1.55; }
+.rpanel .raw { font-size: 11px; color: var(--line2); margin-top: 10px; word-break: break-all; }
+
+.rpanel.wait { align-items: center; text-align: center; color: var(--muted); font-size: 13.5px; gap: 6px; }
+.rpanel.wait .t { font-size: 14.5px; font-weight: 700; color: var(--ink2); }
+
+.rpanel.ok.entry { border-color: var(--brand); }
+.rpanel.ok.entry .tag { background: var(--brand-soft); color: var(--brand-dk); }
+.rpanel.ok.exit { border-color: var(--indigo); }
+.rpanel.ok.exit .tag { background: var(--indigo-soft); color: var(--indigo); }
+/* 포인트는 큰 문구가 아니라 아래 한 줄 (절대 원칙 4) */
+.rpanel.ok .pts { margin-top: 12px; font-size: 13px; font-weight: 700; color: var(--amber); }
+
+.rpanel.deny { border-color: var(--rose); }
+.rpanel.deny .tag { background: var(--rose-soft); color: var(--rose); }
+.rpanel.deny .t { color: var(--rose); }
+
+/* 기술 오류는 인증 거부와 다른 색으로 분리한다(혼동 금지 — 스펙 E절) */
+.rpanel.tech { border-color: var(--line2); background: var(--bg); }
+.rpanel.tech .tag { background: var(--bg2); color: var(--ink2); }
+
+/* ---------- 수동 코드 입력 (확정 D-1 — 보조 수단) ---------- */
+.manual { padding: 14px 18px; }
+.manual > summary {
+  cursor: pointer; font-size: 13px; font-weight: 700; color: var(--brand-dk); list-style: none;
+}
+.manual > summary::-webkit-details-marker { display: none; }
+.manual > summary::before { content: '＋ '; font-weight: 800; }
+.manual[open] > summary::before { content: '－ '; }
+.manual p { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 10px 0 12px; }
+.manual p b { color: var(--ink2); }
+.manual form { display: flex; gap: 8px; }
+.manual input {
+  flex: 1; min-width: 0; height: 42px; padding: 0 13px; border-radius: 10px;
+  border: 1.5px solid var(--line); background: var(--bg); font-size: 14px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink);
+}
+.manual input:focus { outline: none; border-color: var(--brand); background: #fff; }
+.manual button {
+  height: 42px; padding: 0 18px; border-radius: 10px; background: var(--ink); color: #fff;
+  font-weight: 700; font-size: 13.5px; transition: .16s; white-space: nowrap;
+}
+.manual button:hover:not(:disabled) { background: var(--brand); }
+.manual button:disabled { background: var(--bg2); color: var(--muted); cursor: not-allowed; }
+
+/* ============ RESPONSIVE (CLAUDE.md 8장: 980/768/600/430) ============ */
+@media (max-width: 980px) {
+  .scan-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .nav .me .adminname { display: none; }
+}
+@media (max-width: 600px) {
+  .adm-row { flex-wrap: wrap; }
+  .adm-row .pt { margin-left: 53px; }
+  .camview .reader.on::after { width: 170px; height: 170px; }
+}
+@media (max-width: 430px) {
+  .adminbadge { display: none; }
+  .rpanel .t { font-size: 18px; }
+  .manual form { flex-direction: column; }
+  .manual button { width: 100%; }
+}

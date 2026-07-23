@@ -95,6 +95,60 @@ export async function applyToProgram({ studentId, programId }) {
   throw error;
 }
 
+/* ==========================================================================
+   관리자 홈 (ADR 0005 결정 7-5 — 새 RLS 정책 0개)
+   ========================================================================== */
+
+// 관리자 홈이 그리는 필드 + created_by(본인 필터용). is_published 는 상태 표시가 아니라
+// "왜 이 행이 보이는가"를 코드에서 설명하기 위해 함께 가져온다.
+const ADMIN_FIELDS = 'id, category, title, org, date, time, points, is_published, created_by';
+
+/**
+ * 관리자 홈용 프로그램 조회 — "오늘 진행" + "예정".
+ *
+ * [새 정책 없이 성립한다] 기존 programs_select_published + programs_select_own_as_admin 로 충분하다.
+ * [created_by 필터를 프런트가 거는 이유] 확정 H-1 때문에 남의 프로그램은 스캔이 항상 실패한다.
+ *   목록에 띄우면 "누르면 반드시 실패하는 버튼"이 된다 (ADR 0005 결정 7-5).
+ * [날짜는 todayISO()(로컬/KST)로 거른다] DB 의 current_date 로 거르지 않는다 — 그러면 "오늘"의 소스가
+ *   프런트와 DB 로 갈린다 (ADR 0003 6번 / ADR 0004 타임존 판단 유지).
+ * [원칙 1·6 가드] 참여자 수·신청자 명단·출석률·랭킹을 조회하지 않는다. 관리자에게 그 데이터를 주는
+ *   RLS 정책 자체가 없다 (ADR 0005 결정 7-2(d)).
+ *
+ * @param {string} adminId 로그인한 관리자의 profile id (= auth.uid())
+ * @returns {Promise<{today: object[], upcoming: object[]}>}
+ */
+export async function fetchAdminHomePrograms(adminId) {
+  const { data, error } = await supabase.from('programs').select(ADMIN_FIELDS).limit(200);
+  if (error) throw error;
+
+  const iso = todayISO();
+  const mine = (data ?? []).filter((p) => p.created_by && p.created_by === adminId);
+
+  const byDateAsc = (a, b) => String(a.date).localeCompare(String(b.date));
+  return {
+    today: mine.filter((p) => p.date === iso).sort(byDateAsc),
+    upcoming: mine.filter((p) => String(p.date) > iso).sort(byDateAsc).slice(0, 5),
+  };
+}
+
+/**
+ * 스캔 화면의 문맥 표시용 프로그램 1건. 조회에 실패해도 스캔은 그대로 동작해야 하므로 null 로 축약한다.
+ * (검증은 토큰 하나로만 이뤄지며 program_id 를 서버에 넘기지 않는다 — ADR 0005 "대안으로 고려했던 것".)
+ */
+export async function fetchProgramBrief(programId) {
+  if (!programId) return null;
+  const { data, error } = await supabase
+    .from('programs')
+    .select('id, title, date, time, category')
+    .eq('id', programId)
+    .maybeSingle();
+  if (error) {
+    console.warn('[programService] 프로그램 조회 실패 — 문맥 표시 없이 진행합니다:', error);
+    return null;
+  }
+  return data ?? null;
+}
+
 /**
  * 홈 추천 프로그램 목록.
  *

@@ -73,9 +73,23 @@ export function AuthProvider({ children }) {
     setProfile(null);
   }, []);
 
+  // 본인 profiles 행을 다시 읽어 전역 상태를 갱신한다 (profiles_select_own — 새 권한 0개).
+  // 필요한 이유: profile 은 로그인/마운트 시 1회만 조회되므로, QR 퇴장 인증으로 서버가
+  // points_balance 를 올려도 나브 상단 잔액이 그대로 남는다. 완료 화면에는 "+400P 적립"이
+  // 떠 있는데 잔액은 안 변해서 "포인트가 안 들어왔다"로 읽힌다(새로고침해야 반영).
+  // 포인트를 프런트가 계산해 덮어쓰는 게 아니라 서버 값을 다시 읽는 것이다 (절대 원칙 3).
+  const refreshProfile = useCallback(async () => {
+    const { data } = await supabase.auth.getSession();
+    const userId = data?.session?.user?.id;
+    if (!userId) return null;
+    const p = await fetchProfile(userId);
+    if (p) setProfile(p);
+    return p;
+  }, []);
+
   const value = useMemo(
-    () => ({ session, profile, loading, signInStudent, signInAdmin, signOut }),
-    [session, profile, loading, signInStudent, signInAdmin, signOut]
+    () => ({ session, profile, loading, signInStudent, signInAdmin, signOut, refreshProfile }),
+    [session, profile, loading, signInStudent, signInAdmin, signOut, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

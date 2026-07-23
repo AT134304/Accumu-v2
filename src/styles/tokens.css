@@ -29,6 +29,10 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* scrollbar-gutter: 스크롤바 자리를 항상 비워둔다. 모달이 열릴 때 body overflow 를 hidden 으로
+   잠그면 데스크톱 스크롤바가 사라지면서 뒷 페이지가 좌우로 몇 px 튀는데, 모달 딤을 없앤 뒤로는
+   그 움직임이 그대로 보인다. 자리를 미리 확보해 두면 잠금/해제에도 레이아웃이 고정된다. */
+html { scrollbar-gutter: stable; }
 html, body, #root { height: 100%; }
 body {
   font-family: var(--font);
