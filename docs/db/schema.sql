@@ -1,16 +1,25 @@
 -- Accumu v2 — 스키마 단일 소스 (backend-agent가 마이그레이션 작성 시 이 파일을 기준으로 삼는다)
--- 최종 갱신: 2026-07-16 (프로그램 선택 화면 + 참여 신청 팝업, ADR 0004)
--- 범위: 로그인 기능(ADR 0001/0002) + 학생 홈의 추천 프로그램(ADR 0003)
---       + 프로그램 선택/참여 신청(ADR 0004)에 필요한 테이블까지 포함한다.
--- CLAUDE.md 5장의 나머지 테이블(point_transactions, reviews, notifications)은
--- 해당 기능이 architect-agent를 거칠 때 이 파일에 이어서 추가한다.
--- 임의로 없는 필드를 지어내지 않는다 — 여기 없는 필드가 필요하면 먼저 ADR로 논의한다.
+-- 최종 갱신: 2026-07-23 (QR 이중 인증 + 포인트 지급 + 관리자 기능 3종, ADR 0005)
+-- 범위: 로그인(ADR 0001/0002) + 학생 홈 추천(ADR 0003) + 프로그램 선택/참여 신청(ADR 0004)
+--       + QR 입·퇴장 인증 / 포인트 지급 / 관리자 기능 3종(ADR 0005).
+-- CLAUDE.md 5장의 나머지 테이블(reviews, notifications)은 해당 기능이 architect-agent를 거칠 때
+-- 이 파일에 이어서 추가한다. 임의로 없는 필드를 지어내지 않는다 — 여기 없는 필드가 필요하면 먼저 ADR로 논의한다.
 --
--- [마이그레이션 작성 시 주의] 이 파일은 "현재 목표 스키마 상태"를 기술한다. 실제 DB에는 이미
--- 20260709120000_init_profiles_and_mentor_students.sql 과 20260716120000_add_programs_and_career_track.sql
--- 이 적용되어 있으므로, profiles/programs 는 새로 만들어지지 않는다. 따라서 profiles.career_interest 의
--- 타입 변경(text -> career_track, ADR 0003)은 create table 이 아니라 alter table 로 반영해야 한다.
--- 아래 profiles 정의 위 주석 참고. ADR 0004의 신규분은 participations 뿐이다(기존 테이블 변경 없음).
+-- =========================================================
+-- [마이그레이션 작성 시 주의] 이 파일은 "현재 목표 스키마 상태"를 기술한다. 실제 DB에는 이미 아래가 적용돼 있다:
+--   20260709120000_init_profiles_and_mentor_students.sql
+--   20260716120000_add_programs_and_career_track.sql
+--   20260716140000_add_participations.sql
+-- 따라서 profiles / mentor_students / programs / participations 는 새로 만들어지지 않는다.
+-- ADR 0005 의 변경은 create table 이 아니라 아래 형태로 반영해야 한다:
+--   - participations: alter table ... add column (2개) + add constraint (unique 2개)
+--   - participations_insert_own: drop policy + create policy (with check 절이 6 -> 9절로 늘어난다)
+--   - participations: revoke insert / grant insert (컬럼 단위)
+--   - point_transactions: create table (신규)
+--   - 함수 5개: create or replace function + revoke/grant execute
+--   - 관리자 정책 6개: create policy (신규)
+-- 자세한 지시는 ADR 0005 "구현 가이드 → backend-agent".
+-- =========================================================
 
 -- =========================================================
 -- 0. 확장 / 타입
@@ -59,45 +68,52 @@ end $$;
 comment on type program_status is
   'open=참석 가능(신청 가능), ing=참석 중(진행 중), wait=대기(정원이 찼지만 대기 신청 가능), full=마감(모집 기한 종료), over=정원 초과. '
   '신청 가능 여부(join) 매핑과 표시 라벨은 프런트엔드 STATUS 맵이 소유한다 (Accumu_prototype.html 710~716줄). '
-  'participations 도입 시 파생값으로 전환 검토 — ADR 0003 "향후 변경" 참고.';
+  '[ADR 0005] 관리자 프로그램 관리에서 이 값을 수동으로 지정한다 — 여전히 파생값이 아니다(시드 20건 전부 capacity NULL).';
 
 -- 한 학생의 참여 진행도 3종. ADR 0004.
 --
 -- [program_status 와 혼동 금지 — 이름만 비슷하고 개념이 완전히 다르다]
 --   programs.status (program_status)       = 프로그램의 모집 상태. 정적 필드. join 매핑은 프런트 STATUS 맵 소유.
 --   participations.status (아래 타입)      = 한 학생의 참여 진행도. 상태 전이는 DB/서버만 수행한다
---                                            (QR 토큰 검증 결과로만 바뀐다 — 학생이 직접 못 쓴다. 아래 RLS 참고).
+--                                            (QR 토큰 검증 결과로만 바뀐다 — 학생도 관리자도 직접 못 쓴다).
 --
--- [값 3종을 지금 정의하는 근거] CLAUDE.md 6장이 QR 흐름을 이미 확정했고 상태 지점이 기계적으로 도출된다:
---   (1) 신청 -> (2) 입장 인증 시 entry_at 기록 -> (3) 퇴장 인증 시 exit_at 기록 + 포인트 지급.
---   entry_at/exit_at 컬럼을 이번에 만드는 결정과 짝을 이룬다(컬럼이 존재한다 = 그 상태가 도메인에 존재한다).
---   applied 1종만 만들면 아래 RLS 의 `status = 'applied'` 술어가 자명해 보여 삭제 유혹이 생기는데,
---   그 술어는 QR 스펙의 부정 적립을 막는 자물쇠다 (ADR 0004 1번).
---
--- [이번 스코프에서 생성되는 값은 'applied' 하나뿐이다] entered/completed 는 QR 스펙 몫.
--- cancelled/no_show 는 넣지 않는다 — 확정 G-1(신청 취소 스코프 아님)이고 CLAUDE.md 6장에도 근거가 없다.
+-- [ADR 0005] 이제 3종 전부 실제로 생성된다:
+--   applied  : 학생이 participations 행을 insert (participations_insert_own)
+--   entered  : verify_participation_qr() 가 입장 토큰을 소비할 때만
+--   completed: verify_participation_qr() 가 퇴장 토큰을 소비할 때만 (+ 포인트 지급이 같은 트랜잭션)
+--   >>> 이 두 전이를 수행하는 update 문은 앱 전체에서 verify_participation_qr() 안의 2개뿐이다.
+--       participations 에 update 정책이 0개이므로 다른 경로가 존재하지 않는다.
 do $$ begin
   create type participation_status as enum ('applied', 'entered', 'completed');
 exception
   when duplicate_object then null;
 end $$;
 comment on type participation_status is
-  'applied=신청함(행 생성 시점), entered=입장 인증 완료(entry_at 기록됨), completed=퇴장 인증 완료(=참여 완료, 포인트 지급 대상). '
+  'applied=신청함(행 생성 시점), entered=입장 인증 완료(entry_at 기록됨), completed=퇴장 인증 완료(=참여 완료, 포인트 지급됨). '
   '[주의] programs.status(program_status)와 다른 개념이다 — 저쪽은 프로그램의 모집 상태, 이쪽은 한 학생의 참여 진행도. '
-  '이번 스코프(프로그램 선택+참여 신청)에서는 applied 만 생성된다. entered/completed 로의 전이는 QR 이중 인증 스펙 몫이며 '
-  '학생이 직접 쓸 수 없다 (participations_insert_own 의 with check + update 정책 0개).';
+  '전이는 public.verify_participation_qr() 안의 update 2개만 수행한다 (participations 에 update 정책 0개 — ADR 0005).';
+
+-- 포인트 거래 유형 2종. ADR 0005 (확정 C-1).
+-- 값 이름은 CLAUDE.md 5장이 명시한 '적립'/'전환' 그대로다 (ASCII 키로 바꾸면 CLAUDE.md 가 확정한
+-- taxonomy 를 임의로 다시 짓는 셈이 된다 — ADR 0005 "대안으로 고려했던 것" 참고).
+-- [이번 스코프에서 생성되는 값은 '적립' 하나뿐이다] '전환'(포인트 -> 지역화폐 시뮬레이션)은 마이페이지 스펙 몫이며,
+-- 값 집합만 미리 정의한다. 어떤 경로로도 currency_balance 를 건드리지 않는다 (CLAUDE.md 2장 3번).
+do $$ begin
+  create type point_transaction_type as enum ('적립', '전환');
+exception
+  when duplicate_object then null;
+end $$;
+comment on type point_transaction_type is
+  '적립=활동 참여 완료(QR 퇴장 인증)로 포인트가 늘어난 거래, 전환=포인트를 지역화폐로 바꾼 거래(시뮬레이션, 마이페이지 스펙 몫). '
+  '이번 스코프(ADR 0005)에서는 적립만 생성된다. 전환은 값 집합만 정의되어 있고 이를 생성하는 코드는 존재하지 않는다.';
 
 -- =========================================================
 -- 1. profiles
 --    auth.users 1:1 매핑. 학생/관리자 공통 계정 테이블 (CLAUDE.md 5장).
 --
---    [주의] 이 테이블은 이미 생성되어 있다(20260709120000 마이그레이션). ADR 0003의 변경사항은
---    career_interest 컬럼 타입 1건뿐이며, 신규 마이그레이션에서는 아래처럼 alter 로 반영한다:
---      alter table public.profiles
---        alter column career_interest type career_track using career_interest::career_track;
---    캐스팅 안전성: seed-accounts.mjs 는 id/role/code/name 만 insert 하고 profiles 에 update 정책이
---    0개라, 현재 모든 행의 career_interest 는 NULL 이다(= 캐스팅 실패 불가). 만약 캐스팅 에러가 나면
---    예상 밖의 값이 있다는 뜻이므로 중단하고 케빈에게 보고할 것.
+--    [주의] 이 테이블은 이미 생성되어 있다(20260709120000 + 20260716120000 의 career_interest 타입 변경).
+--    ADR 0005 의 변경은 "정책 1개 추가"뿐이며, 그 정책은 mentor_students 테이블을 참조하므로
+--    이 파일 7번 절(관리자 권한 경계)에 모아 두었다. 아래를 함께 읽을 것.
 -- =========================================================
 create table if not exists public.profiles (
   id                uuid primary key references auth.users(id) on delete cascade,
@@ -116,28 +132,67 @@ comment on column public.profiles.code is '가상 이메일 생성 기준값: lo
 comment on column public.profiles.career_interest is
   '학생의 관심 진로 계열. programs.career_track 과 같은 career_track 타입을 공유해 홈 추천 매칭의 값 공간이 일치함을 보장한다 (ADR 0003). '
   'NULL 허용은 의도된 도메인 상태: (1) 학생이 아직 계열을 고르지 않음 -> 홈 추천은 최신순 fallback (스펙 확정 E), '
-  '(2) role=admin 은 계열 개념 자체가 없음. "admin 이면 NULL" 을 CHECK 로 강제하지 않는 이유는 mentor_students 의 role 정합성을 '
-  '트리거로 강제하지 않은 판단과 동일하다 (데모 규모, 시딩 스크립트 책임 — ADR 0002).';
+  '(2) role=admin 은 계열 개념 자체가 없음.';
+comment on column public.profiles.points_balance is
+  '[ADR 0005] 이 컬럼을 증가시키는 코드는 public.verify_participation_qr() 안의 update 1개뿐이다. '
+  'profiles 에 update 정책이 0개이므로 학생도 관리자도 직접 수정할 수 없다 (CLAUDE.md 2장 3번). '
+  '지급 사유는 point_transactions 에 1행씩 남는다 — 잔액과 원장이 어긋나면 그 update 경로 밖에서 누가 손댄 것이다.';
 
 alter table public.profiles enable row level security;
 
--- 본인 행만 조회 가능. 로그인 직후 role/name 대조에 필요한 최소 권한.
+-- [RLS 권한 경계] profiles_select_own
+--   대상 역할: (미지정 = public) — auth.uid() = id 조건 자체가 anon 을 걸러낸다.
+--   허용 행: 본인 행만 select
 create policy "profiles_select_own"
   on public.profiles
   for select
   using (auth.uid() = id);
 
--- insert/update/delete 정책 없음 = 기본 전체 거부.
---  - 계정 생성(시딩)은 service_role 키(scripts/seed-accounts.mjs)로 수행되어 RLS를 우회하므로
---    클라이언트용 insert 정책이 필요 없다 (= 앱 내 회원가입 UI 없음 원칙과 일치).
---  - "마이페이지에서 career_interest 등 본인 정보 수정" 같은 기능이 생기면 그때
---    "본인 행 UPDATE, 단 role/code/points_* 등 민감 컬럼은 제외" 정책을 별도 ADR로 추가한다.
---  - [ADR 0003 메모] update 정책이 없다는 것은 곧 "앱에서 career_interest 를 저장할 방법이 없다"는 뜻이다.
---    계열 선택 UI는 마이페이지 스펙(이번 스코프 아님)이므로, 학생 홈의 계열 매칭 시연에 필요한
---    career_interest 값은 이번엔 시딩(scripts/seed-accounts.mjs)으로만 넣는다.
---  - [ADR 0004 메모] points_balance / points_total / currency_balance 에 update 정책이 0개라는 사실이
---    "신청만으로는 포인트가 1P도 지급되지 않는다"(CLAUDE.md 2장 3번)를 트리거 없이 구조적으로 보장한다.
---    포인트 지급은 QR 퇴장 인증 시점이며(6장 3번), 그 경로는 QR 스펙에서 별도 ADR로 설계한다.
+-- [ADR 0005] profiles 의 두 번째 select 정책(관리자 -> 담당 학생 5명)은 7번 절에 있다.
+--   여기 두지 않은 이유: 그 정책이 public.mentor_students 를 참조하므로 해당 테이블이 먼저 존재해야 한다.
+--
+-- insert/update/delete 정책 없음 = 기본 전체 거부. [ADR 0005 에서도 유지한다 — 이번에 열지 않는다.]
+--  - 계정 생성(시딩)은 service_role 키(scripts/seed-accounts.mjs)로 수행되어 RLS를 우회한다.
+--  - points_balance / points_total 은 이번 스펙에서 실제로 증가하기 시작하지만, 그 증가는
+--    security definer 함수(verify_participation_qr) 안에서만 일어난다. update 정책을 여는 것이 아니다.
+--    >>> 학생에게 update 정책을 열면 그 순간 "자기 포인트를 자기가 고치는" 경로가 생긴다. 절대 열지 말 것.
+--  - "마이페이지에서 career_interest 수정"이 필요해지면 그때 "본인 행 update, 단 points_*/role/code 제외"를
+--    별도 ADR로 추가한다. 컬럼 제외는 RLS 로 표현할 수 없으므로(RLS 는 컬럼 단위가 아니다) 그 시점에도
+--    컬럼 단위 grant 또는 definer RPC 가 필요하다.
+
+-- ---------------------------------------------------------
+-- 1-1. is_admin() — 호출자가 관리자인지 (RLS 정책 4개 + 검증 RPC 가 이 함수를 쓴다)
+--
+-- [security definer 인 이유가 편의가 아니다] profiles 의 RLS 정책 안에서 profiles 를 select 하면
+-- Postgres 가 정책 재귀를 감지해 에러를 낸다("infinite recursion detected in policy"). definer 함수는
+-- RLS 를 우회하므로 재귀가 성립하지 않는다. 7번 절 profiles_select_mentored_students_as_admin 이
+-- 이 함수 없이는 작성 불가능하다.
+--
+-- [여기(profiles 바로 뒤)에 두는 이유 — 순서가 중요하다] 아래 정책 4개가 이 함수를 참조하므로
+-- 함수가 먼저 존재해야 한다: participations_insert_own(4번 절) / programs_insert_own_as_admin /
+-- programs_update_own_as_admin / profiles_select_mentored_students_as_admin /
+-- participations_select_mentored_as_admin(7번 절). 함수 본문이 public.profiles 를 읽으므로
+-- profiles 테이블보다는 뒤여야 한다.
+-- ---------------------------------------------------------
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  );
+$$;
+
+comment on function public.is_admin() is
+  '호출자(auth.uid())가 role=admin 인지. RLS 정책에서 profiles 를 참조할 때 정책 재귀를 피하려고 security definer 로 만들었다. '
+  '읽는 것은 호출자 본인 행 하나뿐이라 이 함수 자체로는 아무 데이터도 노출하지 않는다.';
+
+revoke all on function public.is_admin() from public;
+grant execute on function public.is_admin() to authenticated;
 
 -- =========================================================
 -- 2. mentor_students
@@ -153,30 +208,26 @@ create table if not exists public.mentor_students (
 
 comment on table public.mentor_students is
   '관리자-담당학생 매핑. admin_id가 실제 role=admin 행인지, student_id가 실제 role=student 행인지는 '
-  'DB 레벨 CHECK/트리거로 강제하지 않고 시딩 스크립트(scripts/seed-accounts.mjs) 책임으로 둔다 (프로토타입 스코프, ADR 0002 참고).';
+  'DB 레벨 CHECK/트리거로 강제하지 않고 시딩 스크립트(scripts/seed-accounts.mjs) 책임으로 둔다 (ADR 0002). '
+  '[ADR 0005 경고] 이 테이블이 이제 "관리자가 남의 profiles/participations 를 볼 수 있는 행 경계"가 되었다. '
+  '즉 시딩 정합성(admin_id 자리에 학생이 들어가지 않는 것)이 문서 규율에서 권한 경계의 일부로 승격됐다. '
+  '실제 방어는 profiles/participations 정책의 public.is_admin() 이 함께 담당한다(7번 절).';
 
 alter table public.mentor_students enable row level security;
 
--- 이번 스코프(로그인 기능)에는 이 테이블을 클라이언트가 조회할 일이 없으므로 정책을 추가하지 않는다
--- = 기본적으로 전체 거부. 시딩은 service_role 키로 수행되어 RLS를 우회하므로 문제 없다.
---
--- "담당 학생 아카이브" 기능 스펙이 오면 아래와 같은 정책을 추가할 예정(지금은 미구현):
---   create policy "mentor_students_select_own_as_admin"
---     on public.mentor_students for select
---     using (auth.uid() = admin_id);
---   -- 그리고 profiles에도 "관리자는 자기 담당 학생 행을 select 가능" 정책이 함께 필요해진다.
---   -- [ADR 0004 메모] participations 의 admin select 정책(담당 학생 참여 이력)도 이 정책과 한 세트다.
+-- [ADR 0005] 정책은 7번 절(mentor_students_select_own_as_admin) 참고. 이번에 처음 열린다.
+--   insert/update/delete 는 계속 0개 = 전체 거부 (담당 매핑 변경 UI 없음. 시딩이 유일한 입력 경로).
 
 -- =========================================================
 -- 3. programs
 --    진로·커리어 활동 프로그램 (CLAUDE.md 5장 + 스펙 확정 D의 추가 필드).
---    ADR 0003 / docs/specs/student-home.md
+--    ADR 0003 / ADR 0005(관리자 프로그램 관리)
 -- =========================================================
 create table if not exists public.programs (
   id            uuid primary key default gen_random_uuid(),
   category      program_category not null,
   title         text not null,
-  description   text not null,                      -- 참여 팝업에서 필수 표시(ADR 0004에서 실사용 시작). 프로토타입 전 프로그램에 설명이 있다.
+  description   text not null,                      -- 참여 팝업에서 필수 표시. 프로토타입 전 프로그램에 설명이 있다.
   org           text not null,                      -- 주최/기관명. 확정 D. 모든 카드에 표시되므로 필수.
   date          date not null,                      -- 표시 포맷("7월 16일 (목)")은 프런트엔드가 생성한다.
   time          text not null,                      -- [주의] time 타입이 아니라 자유 텍스트다. 아래 comment 참고.
@@ -187,10 +238,12 @@ create table if not exists public.programs (
   status        program_status not null default 'open', -- 확정 D. 정적 값(참여수/정원 파생 아님).
   is_published  boolean not null default true,      -- 게시/게시중단. 관리자 기능 "올리기/내리기"가 이 값을 토글한다.
   created_by    uuid references public.profiles(id) on delete set null,
-  created_at    timestamptz not null default now(), -- 추천 "최신순" 정렬의 시간 축 (확정 E). uuid PK는 생성 순서를 담지 못한다.
+  created_at    timestamptz not null default now(), -- 추천 "최신순" 정렬의 시간 축 (확정 E).
 
   constraint programs_capacity_positive check (capacity is null or capacity > 0),
   -- CLAUDE.md 7장 포인트 규칙(최소 150P, 최대 3000P, 끝자리 0)을 DB 레벨에서 강제한다.
+  -- [ADR 0005] 관리자 프로그램 등록/수정이 열리면서 이 CHECK 가 처음으로 "사람이 입력한 값"을 막게 된다.
+  --   위반 시 23514 -> HTTP 400. 프런트도 같은 규칙으로 미리 검증하되, 경계의 소유자는 이 CHECK 다.
   constraint programs_points_rule      check (points between 150 and 3000 and points % 10 = 0),
   constraint programs_popularity_range check (popularity >= 0)
 );
@@ -204,60 +257,56 @@ comment on column public.programs.time is
   '프런트엔드는 이 값을 파싱하지 말고 그대로 출력할 것.';
 comment on column public.programs.capacity is
   'NULL 허용 = 정원 미정/무제한. status 파생에 사용하지 않는다 (확정 D). '
-  '[ADR 0004] 참여 신청이 생긴 뒤에도 정원 차단을 구현하지 않는다 — 확정 C-1: 시드 20건 전부 capacity 가 NULL 이라 '
-  '정원 개념이 데모에 존재하지 않고, 따라서 "정원이 찼는데 status 는 open" 모순이 성립할 여지가 없다.';
+  '[ADR 0005] 관리자 프로그램 관리가 열려도 정원 차단을 구현하지 않는다 — 시드 20건 전부 capacity 가 NULL 이라 '
+  '정원 개념이 데모에 존재하지 않는다(확정 C-1 유지).';
 comment on column public.programs.popularity is
   '[절대 원칙 가드] 프로그램의 인기 지표이지 학생 간 순위가 아니다. 학생 단위 집계/랭킹으로 파생시키는 설계 금지 (CLAUDE.md 2장 1번). '
-  '학생 홈은 이 값을 표시하지도 정렬에 쓰지도 않는다(정렬은 계열 일치 우선 + created_at desc). '
-  '사용처는 "프로그램 선택" 화면의 인기순 정렬이다(확정 B-1, ADR 0004에서 실사용 시작 — 정렬 입력으로만 쓰고 숫자를 화면에 렌더하지 않는다).';
+  '[ADR 0005] 실참여자 수로 전환하지 않는다 — participations 로 집계하려면 관리자에게 전교생 참여 조회 권한이 필요해지는데 '
+  '그것이 정확히 이번에 열지 않기로 한 권한이다(7번 절 참고). 관리자 프로그램 관리 화면에서도 이 값을 노출/편집하지 않는다.';
+comment on column public.programs.is_published is
+  '게시/게시중단. 관리자 기능 "올리기/내리기" 가 이 값을 토글한다 (CLAUDE.md 10장). 삭제가 아니다. '
+  '[ADR 0005 — 게시중단이 이미 신청한 학생에게 주는 영향. 반드시 알고 있을 것] '
+  '(1) participations 행은 그대로 남는다 — 게시중단은 programs 의 값 변경일 뿐 참여를 지우지 않는다. '
+  '(2) 그럼에도 학생은 그 programs 행을 더 이상 select 할 수 없다(programs_select_published 가 가린다). '
+  '    학생 화면의 제목/일시/포인트는 participations 가 아니라 programs 에서 오므로 빈칸이 된다. '
+  '    >>> frontend 는 programs 조회 결과에 해당 program_id 가 없는 경우를 정상 경로로 다뤄야 한다 '
+  '        (QR 목록/아카이브에서 "게시가 중단된 프로그램" 으로 표시. 에러로 죽지 않게 할 것). '
+  '(3) QR 인증은 계속 동작한다 — verify_participation_qr 은 security definer 라 RLS 를 타지 않고 '
+  '    is_published 를 조건으로 쓰지도 않는다. 이미 신청한 학생이 게시중단 때문에 포인트를 못 받는 일은 없다. '
+  '(4) 막히는 것은 신규 신청뿐이다 — participations_insert_own 의 exists 서브쿼리가 is_published = true 를 요구한다.';
 comment on column public.programs.created_by is
   '프로그램을 등록한 관리자. on delete set null — 관리자 계정이 사라져도 프로그램 기록은 남긴다. '
-  '시딩 시 데모 관리자(code=''ADM-0001'')의 id를 채운다 (scripts/seed-programs.mjs).';
+  '[ADR 0005 — 이 컬럼이 관리자 권한의 단일 축이다] 프로그램 수정/게시중단/미게시 조회(3개 정책)와 '
+  'QR 스캔 인증(확정 H-1, verify_participation_qr)이 모두 created_by = auth.uid() 하나를 경계로 쓴다. '
+  'NULL 이면 어느 관리자에게도 권한이 없다(fail-closed) — RLS 에서는 NULL = auth.uid() 가 NULL 이라 통과하지 않고, '
+  'verify_participation_qr 은 명시적으로 not_authorized 를 반환한다.';
 
 alter table public.programs enable row level security;
 
 -- [RLS 권한 경계] programs_select_published
---   대상 역할: authenticated (student, admin 공통 — role 구분 없이 동일 정책 적용)
+--   대상 역할: authenticated (student, admin 공통)
 --   허용 행: is_published = true 인 행만 select
---   불가능: 미게시(is_published = false) 행 조회 — 학생/관리자 모두 차단.
---           모든 insert/update/delete (아래 참고)
---   용도: 학생 홈의 추천 프로그램 조회 (docs/specs/student-home.md),
---         프로그램 선택 화면의 전체 목록 조회 (docs/specs/student-programs.md)
---
---   [to authenticated 를 명시하는 이유] using (is_published = true) 만 쓰고 to 절을 생략하면 기본 대상이
---   public 역할이라, 로그인하지 않은 anon 키 보유자도 전체 프로그램 목록을 읽을 수 있다. 개인정보는 아니지만
---   앱의 모든 프로그램 화면이 로그인 뒤에 있는데 데이터만 밖에 열어둘 이유가 없다.
---   (profiles_select_own 은 auth.uid() = id 조건 자체가 anon 을 걸러내 to 절 없이도 안전했다 — programs 는
---    그 방어가 없으므로 명시가 필요하다.)
+--   [ADR 0005] 이 정책은 그대로 유지된다. 관리자용 미게시 조회는 별도 정책으로 7번 절에 추가되며,
+--             두 정책은 OR 로 합쳐진다(= 관리자는 "게시된 전부 + 본인이 만든 미게시").
 create policy "programs_select_published"
   on public.programs
   for select
   to authenticated
   using (is_published = true);
 
--- [RLS 권한 경계] insert/update/delete 정책 없음 = 기본 전체 거부 (모든 역할, 모든 행에 대해 차단)
---  - 시딩(scripts/seed-programs.mjs)은 service_role 키로 수행되어 RLS를 우회하므로 이번 기능 동작에 지장 없다.
---  - 학생은 프로그램을 만들거나 고칠 수 없고, is_published=false 인 프로그램을 볼 수도 없다.
---
--- [관리자 정책을 이번에 넣지 않는 이유]
---   관리자 "프로그램 관리(올리기/내리기/수정)" 화면은 이번 스코프가 아니고 스펙도 아직 없다. 지금
---   "본인이 만든 행만(created_by = auth.uid())" 으로 할지 "전체 허용" 으로 할지 정하면 근거 없는 추측이 되고,
---   쓰이지 않는 쓰기 권한이 열린 채로 남는다. mentor_students 에 정책을 0개 둔 것과 같은 원칙
---   (= 이번 스코프에 필요한 최소 정책만). 프로그램 관리 스펙이 오면 별도 ADR로 아래를 함께 결정한다:
---     - admin insert/update 정책의 행 경계 (created_by 기준 vs 전체)
---     - admin 이 미게시(is_published=false) 행을 select 할 수 있게 하는 정책 (위 정책은 admin 에게도 감춘다)
---       [ADR 0004 주의] 그 정책이 생기면 아래 participations_insert_own 의 exists 서브쿼리가 admin 에게
---       미게시 행을 보여주게 된다. 그래서 그 서브쿼리는 p.is_published = true 를 명시적으로 다시 건다.
+-- [ADR 0005] programs 의 관리자 정책 3개(미게시 select / insert / update)는 7번 절 참고.
+--   delete 정책은 이번에도 열지 않는다 — 근거는 7번 절 상단.
 
 -- =========================================================
 -- 4. participations
---    학생의 프로그램 신청/참여 행 (CLAUDE.md 5장). 이후 QR 인증·포인트·아카이브·만족도 평가가
---    전부 이 행 위에 쌓인다.
---    ADR 0004 / docs/specs/student-programs.md
+--    학생의 프로그램 신청/참여 행 (CLAUDE.md 5장).
+--    ADR 0004(신청) / ADR 0005(QR 인증 + 포인트 지급)
 --
---    [이 테이블이 앱 최초의 "쓰기" 경로다] 이전까지 RLS 정책은 select 2개뿐이었고 insert/update/delete 는
---    전 테이블 0개였다. 아래 participations_insert_own 이 학생이 DB에 쓰는 첫 경로이며, 이 파일에서
---    가장 조심해서 읽어야 할 블록이다.
+--    [권한 구조 한눈에 — ADR 0005 이후]
+--      insert : 학생 본인만(관리자 제외). 컬럼 단위 grant(student_id, program_id) + with check 9절.
+--      select : 본인 행(학생) / 담당 학생의 completed 행(관리자, 7번 절).
+--      update : 정책 0개. 전이는 public.verify_participation_qr()(security definer) 안의 update 2개뿐.
+--      delete : 정책 0개. 시연 리셋은 service_role.
 -- =========================================================
 create table if not exists public.participations (
   id           uuid primary key default gen_random_uuid(),
@@ -265,118 +314,120 @@ create table if not exists public.participations (
   program_id   uuid not null references public.programs(id) on delete cascade,
   status       participation_status not null default 'applied',
 
-  -- [아래 4개 컬럼은 QR 이중 인증 스펙(다음) 몫이라 이번 스코프에서 값이 절대 채워지지 않는다.]
-  --   그럼에도 지금 만드는 이유는 "안 쓰지만 미리 만들어두면 편해서"가 아니다:
-  --   RLS with check 는 행 단위 술어라 "존재하지 않는 컬럼"을 미리 금지할 수 없다. 이 컬럼들을 QR 스펙에서
-  --   추가하면 그 시점의 participations_insert_own 은 새 컬럼을 언급하지 않으므로, 학생이 entry_at 을
-  --   채우거나 토큰을 심어 insert 하는 경로가 조용히 열린다(= QR 이중 인증 우회 = 부정 적립).
-  --   지금 컬럼을 만들고 아래 정책에 "... is null" 을 박아두면 그 구멍이 애초에 생기지 않는다.
-  --   즉 이 컬럼들은 이번 스펙의 보안 요구사항(스펙 이슈 1)을 성립시키는 전제다. ADR 0004 3번.
-  entry_at     timestamptz,                          -- 입장 인증 시각. QR 스캔 성공 시에만 서버가 기록한다.
-  exit_at      timestamptz,                          -- 퇴장 인증 시각. 기록 시 포인트 지급 + 만족도 평가 노출(CLAUDE.md 6장 3번).
-  entry_token  text,                                 -- [주의] 형식 미정이라 text. 아래 comment 참고.
+  entry_at     timestamptz,                          -- 입장 인증 시각. verify_participation_qr() 만 기록한다.
+  exit_at      timestamptz,                          -- 퇴장 인증 시각. 기록과 동시에 포인트가 지급된다(같은 트랜잭션).
+
+  -- [QR 1회용 토큰 — ADR 0005 1번]
+  --   형식: Crockford Base32 10자 (0-9 A-Z 에서 I, L, O, U 제외 = 32문자, 50비트).
+  --   발급: public.issue_participation_qr() 만. 학생은 이 컬럼에 쓸 수 없다(insert 컬럼 grant + with check).
+  --   무효화: 토큰 문자열을 지우지 않는다. status 전이가 곧 무효화다(아래 comment 참고).
+  entry_token  text,
   exit_token   text,
 
-  created_at   timestamptz not null default now(),   -- 신청 시각. ADR 0002/0003 전례(전 테이블에 존재) + 참여 이력의 기본 축.
+  -- [ADR 0005 신규] 만료 시각을 DB 컬럼에 둔다. QR payload 의 expires_at 은 학생 화면 카운트다운 표시용일 뿐이고,
+  --   판정은 오로지 이 컬럼으로 한다 — payload 를 신뢰하면 만료를 위조할 수 있다(스펙 "검증 판정은 DB 값 기준").
+  entry_token_expires_at timestamptz,
+  exit_token_expires_at  timestamptz,
 
-  -- [중복 신청 차단 — 클라이언트 방어만으론 새로고침/두 탭/개발자도구에서 뚫린다]
-  --   인수 조건이 "DB 제약으로도 막힌다"를 명시했다. 위반 시 23505 -> PostgREST HTTP 409.
-  --   status 무관하게 (학생, 프로그램) 쌍당 1행. 확정 G-1(신청 취소 스코프 아님)이라 "취소 후 재신청" 충돌 없음.
-  unique (student_id, program_id)
+  created_at   timestamptz not null default now(),   -- 신청 시각.
+
+  -- [중복 신청 차단] 위반 시 23505 -> PostgREST HTTP 409.
+  unique (student_id, program_id),
+
+  -- [ADR 0005] 토큰 유일성. 인덱스를 만들지 않는다는 기존 원칙(ADR 0003 주의 4)의 예외이며,
+  --   unique (student_id, program_id) 와 같은 "제약의 부산물" 범주다.
+  --   컬럼 간(entry_token vs exit_token) 충돌은 unique 로 표현할 수 없으므로 발급 함수의 재시도 루프가 담당한다.
+  constraint participations_entry_token_unique unique (entry_token),
+  constraint participations_exit_token_unique  unique (exit_token)
 );
 
 comment on table public.participations is
-  '학생의 프로그램 신청/참여 행. 이번 스코프(프로그램 선택 + 참여 신청 팝업)에서는 status=applied 인 행이 생성되는 것까지만 동작한다. '
-  'QR 입·퇴장 인증 / 포인트 지급 / 만족도 평가는 다음 스펙이며, 이 테이블의 정책은 그것들이 붙었을 때 뚫리지 않도록 지금 봉인해 둔 것이다 (ADR 0004). '
-  '[시연 리셋] delete from public.participations;  (service_role 로 실행 — 학생/관리자 키로는 delete 정책이 0개라 불가능하다.)';
+  '학생의 프로그램 신청/참여 행. applied(신청) -> entered(입장 인증) -> completed(퇴장 인증 + 포인트 지급). '
+  '[시연 리셋] 아래 3개를 함께 실행해야 포인트 정합이 맞는다 (service_role 로 실행):'
+  '  delete from public.participations;  -- point_transactions 는 on delete cascade 로 함께 지워진다'
+  '  update public.profiles set points_balance = 0, points_total = 0;';
 comment on column public.participations.status is
-  '한 학생의 참여 진행도. [주의] programs.status 와 다른 개념이다(저쪽은 프로그램의 모집 상태). '
-  '학생은 이 값을 applied 로만 insert 할 수 있고(participations_insert_own 의 with check), update 정책이 0개라 이후 변경도 불가능하다. '
-  'entered/completed 로의 전이는 QR 토큰 검증을 통과한 서버 경로만 수행한다 (CLAUDE.md 2장 5번: QR은 부정 참여 방지 장치이므로 단순화하지 않는다).';
+  '한 학생의 참여 진행도. [주의] programs.status 와 다른 개념이다. '
+  '학생은 applied 로만 insert 할 수 있고(with check), update 정책이 0개라 이후 변경도 불가능하다. '
+  'entered/completed 전이는 public.verify_participation_qr() 안의 update 2개만 수행하며, 그 update 는 '
+  'where 절에 이전 상태를 함께 걸어(applied->entered, entered->completed) 동시 스캔에서도 한 번만 성공한다(CAS).';
 comment on column public.participations.entry_token is
-  'QR 1회용 토큰. [형식 미정 -> text] career_track 등 값 집합이 확정된 것은 enum 으로 좁혔지만(ADR 0003), 토큰 형식(랜덤 문자열/base64/uuid 등)은 '
-  'QR 스펙의 결정사항이라 지금 uuid 로 좁히면 추측이 된다. unique 제약도 붙이지 않는다 — 재사용 방지 메커니즘 자체가 QR 스펙 설계다. '
-  '만료(발급+30분)·사용 여부를 DB 컬럼(예: entry_token_expires_at)에 둘지 QR payload 에 둘지도 그때 결정한다 (CLAUDE.md 6장).';
+  'QR 1회용 입장 토큰. Crockford Base32 10자. public.issue_participation_qr() 이 발급하며 재발급 시 덮어쓴다'
+  '(= 이전 토큰은 어느 행과도 매칭되지 않아 not_found 로 거부된다). '
+  '[사용 후에도 문자열을 지우지 않는 이유] NULL 로 지우면 재스캔 시 행을 찾지 못해 "이미 사용됨(used)"과 '
+  '"없는 토큰(not_found)"을 구분할 수 없다(스펙이 두 사유를 구분해 표시하도록 요구). 대신 status 전이가 무효화 역할을 한다 — '
+  '입장 토큰은 status=applied 일 때만 소비되므로 한 번 entered 가 되면 같은 토큰으로 두 번 전이할 수 없다.';
+comment on column public.participations.entry_token_expires_at is
+  '발급 시각 + 30분 (CLAUDE.md 6장). 만료 판정의 유일한 소스. QR payload 안의 expires_at 은 학생 화면 카운트다운용 표시값이며 '
+  '검증에 쓰지 않는다(위조 가능). 학생은 이 컬럼에 insert 할 수 없다 — 컬럼 단위 insert grant + with check 9절.';
 comment on column public.participations.created_at is
-  '신청 시각. [알려진 틈 — 수용] with check 가 이 컬럼을 검사하지 않으므로 학생이 값을 위조해 insert 할 수 있다. '
-  '위조 대상이 본인 행의 신청 시각뿐이고 어떤 권한/포인트 결정에도 쓰이지 않아 수용한다(ADR 0004 "알려진 틈"). '
-  'created_at = now() 술어는 트랜잭션 내 now() 안정성에 기대는 비자명한 비교라, 프런트가 값을 보내는 순간 원인 불명의 RLS 에러를 낸다 '
-  '(방어 이득 없이 디버깅 비용만 발생). 대신 프런트는 insert 에 student_id/program_id 외 어떤 컬럼도 보내지 않는다. '
-  '이 값이 포인트/권한 판단에 쓰이게 되면 봉인 방법을 재검토한다.';
-
--- [인덱스를 추가로 만들지 않는 이유 — 의도적 결정, ADR 0003 "주의 4"와 동일]
---   데모 데이터가 20행 규모라 PK 외 인덱스는 순수 노이즈다. 단 위 unique (student_id, program_id) 가 만드는
---   인덱스는 제약의 부산물이라 예외이며, 선두 컬럼이 student_id 라 participations_select_own 의
---   student_id = auth.uid() 조회도 그대로 커버한다. program_id 단독 인덱스를 추가하지 말 것.
+  '신청 시각. [ADR 0005] 컬럼 단위 insert grant(student_id, program_id) 도입으로 ADR 0004 의 "created_at 위조 가능" 틈이 닫혔다.';
 
 alter table public.participations enable row level security;
 
 -- [RLS 권한 경계] participations_select_own
 --   대상 역할: authenticated
---   허용 행: student_id = auth.uid() 인 행만 select ("본인이 신청한 것"만)
---   불가능: 다른 학생의 신청 내역 조회 (학생↔학생 차단). 관리자도 볼 수 없다 — admin 정책이 없다(아래 참고).
---   용도: 카드/팝업의 "신청됨" 판정, 홈 추천에서 이미 신청한 프로그램 제외 (확정 D-1)
---
---   [부수 효과 — 절대 원칙이 UI 규율이 아니라 RLS 구조로도 성립한다]
---   학생에게는 본인 행만 보이므로 count(*) 를 던져도 자기 신청 수만 나온다. 즉 "N명이 신청했어요"류의
---   신청자 수 표시나 학생 단위 집계/랭킹은 애초에 데이터를 얻을 수 없다 (CLAUDE.md 2장 1번).
+--   허용 행: student_id = auth.uid() 인 행만 select
+--   용도: "신청됨" 판정, 홈 추천 제외(D-1), QR 발급 대상 목록, QR 모달 폴링(상태 자동 반영),
+--         홈 stackviz(완료 활동 월별 집계 — 확정 B-1. 새 정책이 필요 없다)
 create policy "participations_select_own"
   on public.participations
   for select
   to authenticated
   using (student_id = auth.uid());
 
--- [RLS 권한 경계] participations_insert_own  <<< 이 앱 최초의 쓰기 정책. 각 절이 실제 공격 경로를 하나씩 막는다.
+-- [ADR 0005] participations 의 관리자 select 정책(담당 학생의 completed 행만)은 7번 절 참고.
+
+-- [RLS 권한 경계] participations_insert_own  <<< 학생이 DB에 쓰는 유일한 직접 경로. 각 절이 공격 경로를 하나씩 막는다.
 --   대상 역할: authenticated
---   허용 행: 아래 with check 6절을 전부 만족하는 행만 insert
+--   허용 행: 아래 with check 9절을 전부 만족하는 행만 insert
 --   불가능(= 각 절이 막는 것):
---     1) student_id = auth.uid()          -> 남의 이름으로 신청 (student_id 위조).                       위반 시 42501/403
---     2) status = 'applied'               -> 스스로 "참여 완료" 상태로 insert.                            위반 시 42501/403
---     3) entry_at is null, exit_at is null-> 입·퇴장 시각을 직접 기록해 QR 인증을 건너뛰기.               위반 시 42501/403
---     4) entry_token/exit_token is null   -> 자기가 아는 토큰을 미리 심어두고 그 QR 을 생성하기.          위반 시 42501/403
---     5) exists(... is_published = true)  -> 미게시 프로그램에 신청 (uuid 를 알아냈다고 가정).            위반 시 42501/403
---     + unique (student_id, program_id)   -> 중복 신청 (제약이 담당).                                     위반 시 23505/409
---   용도: 참여 신청 팝업의 "참석 신청하기" (docs/specs/student-programs.md)
+--     1) student_id = auth.uid()          -> 남의 이름으로 신청.                                 위반 시 42501/403
+--     2) not public.is_admin()            -> [ADR 0005 신규] 관리자 계정의 자기참여. 아래 참고.  위반 시 42501/403
+--     3) status = 'applied'               -> 스스로 "참여 완료" 상태로 insert = 부정 적립.        위반 시 42501/403
+--     4) entry_at/exit_at is null         -> 입·퇴장 시각을 직접 기록해 QR 인증 건너뛰기.        위반 시 42501/403
+--     5) entry_token/exit_token is null   -> 자기가 아는 토큰을 심어두고 그 QR 을 생성하기.      위반 시 42501/403
+--     6) *_token_expires_at is null       -> [ADR 0005 신규] 만료 시각 선주입.                    위반 시 42501/403
+--     7) exists(... is_published = true)  -> 미게시 프로그램에 신청.                              위반 시 42501/403
+--     + unique (student_id, program_id)   -> 중복 신청 (제약이 담당).                             위반 시 23505/409
 --
---   [2번과 3·4번이 지금 무의미해 보이는 것이 정확히 위험 지점이다]
---   현재는 포인트 지급 로직이 없어 완료 상태를 위조해도 아무 일이 없다. 그러나 QR 퇴장 인증이 포인트를
---   지급하는 순간(CLAUDE.md 6장 3번), 이 절들이 없으면 학생은 status:'completed' 한 줄로 QR 이중 인증을
---   통째로 건너뛴다. QR 2회 인증은 부정 참여 방지 장치인데(2장 5번) 그 옆에 뒷문을 열어두는 셈이다.
---   >>> 이 절들을 "지금 안 쓰니까"라며 지우지 말 것. 이것이 ADR 0004 의 존재 이유다.
+--   [2번 — 이번에 새로 막는 폐루프. G-3 이 만든 것이다]
+--   확정 G-3 으로 관리자에게 programs insert 권한이 열리면서, 관리자 한 계정이 다음을 전부 할 수 있게 됐다:
+--     (1) 3,000P 짜리 프로그램을 만든다(created_by = 본인)  -> programs_insert_own_as_admin
+--     (2) 그 프로그램에 자기 이름으로 신청한다               -> student_id = auth.uid() 를 만족한다!
+--     (3) 자기 QR 을 발급받는다                              -> issue_participation_qr (본인 참여 건이므로 통과)
+--     (4) 자기가 스캔해 완료 처리한다                        -> verify_participation_qr (created_by = 본인이므로 H-1 통과)
+--   = 관리자가 자기 포인트를 무한히 찍어내는 경로다. 이전 스코프에서는 (1)이 불가능해 성립하지 않았다.
+--   >>> `not public.is_admin()` 한 절이 (2)를 끊어서 루프를 연다. 도메인적으로도 맞다 —
+--       CLAUDE.md 4장에서 신청은 student 의 행위이고 admin 은 등록/스캔/조회만 한다.
+--       (관리자가 학생 계정으로 신청하는 것은 여전히 가능하지만, 그건 학생 계정의 권한이고 QR 2회 인증도 그대로다.)
 --
---   [5번 — with check 안의 서브쿼리에 대해]
---   RLS 정책 표현식은 일반 SQL 표현식이라 서브쿼리를 쓸 수 있다. 참조되는 programs 의 RLS 도 이 안에서
---   함께 적용되므로(정책 표현식은 질의자 권한으로 평가된다 — Supabase 가 이런 경우 security definer 함수를
---   권하는 이유가 바로 이것이다) programs_select_published 가 자동으로 걸린다. 그럼에도 p.is_published = true 를
---   명시적으로 다시 쓰는 이유: 관리자 프로그램 관리 스펙이 "admin 은 미게시도 select 가능" 정책을 programs 에
---   추가하면(위 3번 절에 예고됨) 이 서브쿼리가 admin 에게 미게시 행을 보여주게 되어, participations 의 경계가
---   다른 테이블 정책 변경에 딸려 조용히 흔들린다. 명시하면 이 정책이 자기 경계를 스스로 지킨다.
---   (무한 재귀 없음: programs 정책은 participations 를 참조하지 않는다.)
+--   [6번 절이 늘어난 이유] ADR 0004 가 "컬럼이 추가되면 이 with check 를 반드시 함께 재검토하라"고
+--   지목했다. RLS 는 행 단위 술어라 새 컬럼을 자동으로 막지 않는다. 만료 컬럼만 위조한 토큰은
+--   (토큰 자체를 심을 수 없으므로) 실제로는 무해하지만, "봉인은 컬럼이 생길 때 함께 한다"는
+--   규율을 여기서 깨면 다음 컬럼에서 진짜 구멍이 생긴다.
 --
---   [date < 오늘(H-1) 과 status(full/over/ing) 를 여기서 막지 않는 이유 — 경계선: 권한은 DB, 신청 가능 여부는 프런트]
---     - is_published 는 "관리자가 아직 공개하지 않은 데이터" = 권한 경계라 DB 가 막는다.
---     - status 의 join 매핑은 프런트 STATUS 맵이 소유한다(ADR 0003 4번). DB 에 status in ('open','wait') 를
---       박으면 같은 규칙이 두 레이어로 쪼개져 드리프트한다.
---     - 지난 날짜 신청은 부정 적립이 되지 않는다(포인트는 QR 퇴장 인증에서만 나오고, 지난 프로그램엔 스캔할
---       관리자가 없다). 게다가 정책 안의 current_date 는 세션 TimeZone(Supabase 기본 UTC) 기준이라 KST 와
---       어긋나고, 이를 피하려 (now() at time zone 'Asia/Seoul')::date 를 박으면 날짜 소스가 프런트 todayISO()
---       와 두 곳으로 갈린다(ADR 0003 6번 타임존 주의).
---     - 인수 조건도 "DB 제약으로도 막힌다"를 중복 신청 1건에만 요구한다.
---
---   [to authenticated 를 명시하는 이유] student_id = auth.uid() 는 anon 에서 auth.uid() 가 NULL 이라 자연히
---   거짓이 되지만, 이 테이블은 앱 최초의 쓰기 경로라 대상 역할을 독자의 추론에 맡기지 않는다. 특히 insert 에서
---   to 를 생략하면 대상이 public 역할이 되어 anon 차단이 술어 하나에만 걸린다.
+--   [7번 — with check 안의 서브쿼리 재검토 (ADR 0005 에서 실제로 확인함)]
+--   7번 절에서 programs 에 "관리자는 본인이 만든 미게시 행도 select 가능" 정책이 추가된다. ADR 0004 가
+--   예고한 함정이 이제 현실이 됐다: 정책 표현식은 질의자 권한으로 평가되므로, 관리자가 스스로 신청하면
+--   이 서브쿼리가 그 관리자에게 자기 미게시 프로그램을 보여준다. >>> 그럼에도 `and p.is_published = true`
+--   를 명시적으로 걸어둔 덕분에 결과는 여전히 거부다. ADR 0004 의 방어가 설계대로 작동했다.
+--   (위 2번 절이 관리자 신청을 통째로 막으므로 이제 방어가 2중이지만, 두 절 중 어느 것도 지우지 말 것 —
+--    2번은 "누가", 7번은 "어떤 프로그램에" 를 막는 서로 다른 축이다.)
 create policy "participations_insert_own"
   on public.participations
   for insert
   to authenticated
   with check (
     student_id = auth.uid()
+    and not public.is_admin()
     and status = 'applied'
     and entry_at is null
     and exit_at is null
     and entry_token is null
     and exit_token is null
+    and entry_token_expires_at is null
+    and exit_token_expires_at is null
     and exists (
       select 1
       from public.programs p
@@ -385,43 +436,593 @@ create policy "participations_insert_own"
     )
   );
 
--- [RLS 권한 경계] update/delete 정책 없음 = 기본 전체 거부 (모든 역할, 모든 행에 대해 차단)
---  - 확정 G-1: 신청 취소는 스코프가 아니다. mentor_students 에 정책을 0개 둔 원칙과 동일 — 필요할 때 연다.
---  - 정책이 0개면 RLS 가 행 자체를 보여주지 않으므로 update/delete 는 에러가 아니라 "0행 영향"으로 끝난다.
---  - 즉 학생은 신청 후 자기 행의 status 를 completed 로 바꾸거나 entry_at 을 채워 넣을 수 없다.
---  - 시연 리셋(delete from public.participations;)은 service_role 키로 수행되어 RLS 를 우회한다.
---
--- [학생이 지정 가능한 컬럼은 student_id, program_id 둘뿐이다]
---   나머지는 default 또는 위 with check 의 NULL 강제가 담당한다. 예외는 created_at(위 comment 의 "알려진 틈")과
---   id(본인 행의 PK 를 스스로 고르는 것뿐이라 무해). student_id 에 default auth.uid() 를 두지 않는 이유:
---   클라이언트가 값을 보내면 default 는 무시되므로 default 는 방어가 아니다 — 방어처럼 보이는 비방어 장치를
---   두면 나중에 읽는 사람이 "default 가 있으니 안전하다"고 오해한다. 방어는 오로지 with check 가 한다.
---
--- [관리자 정책을 이번에 넣지 않는 이유 — ADR 0003 이 programs 에서 내린 판단과 동일 + 하나 더]
---   QR 스캔 시 관리자는 남의 participations 행을 update 해야 하지만, 그 정책의 행 경계(담당 학생만 vs 전체)와
---   컬럼 경계(entry_at/status 만)는 QR 토큰 검증 설계와 한 몸이라 지금 정하면 추측이 된다.
---   >>> 추가 근거(중요): RLS 는 컬럼 단위가 아니다. for update using (관리자 조건) 같은 정책을 순진하게 열면
---       관리자가 그 행의 모든 컬럼을 바꿀 수 있다(student_id 를 다른 학생으로 옮기는 것 포함).
---       그래서 QR 스캔은 정책보다 security definer RPC(토큰을 인자로 받아 서버가 컬럼을 확정)가 유력하다.
---       QR 스펙의 별도 ADR에서 결정한다.
---   담당 학생 아카이브용 admin select 정책은 mentor_students 정책(위 2번 절)과 한 세트라 아카이브 스펙 몫이다.
---
--- [QR 스펙에서 컬럼이 추가되면 이 정책을 반드시 함께 재검토할 것]
---   with check 는 행 단위 술어라 새 컬럼을 자동으로 막지 않는다. 다만 위 4개 토큰/시각 컬럼을 지금 봉인해 둔
---   덕분에 리스크는 크게 줄어 있다 — 예컨대 entry_token_expires_at 이 추가되고 정책 개정을 잊더라도, 학생은
---   여전히 entry_token 을 심을 수 없으므로 만료 시각만 위조된 "존재하지 않는 토큰"은 쓸모가 없다.
---   컬럼 단위 insert 권한(revoke insert ...; grant insert (student_id, program_id) ...)은 이번에 기각했다
---   (근거: ADR 0004 "대안으로 고려했던 것"). 컬럼이 더 늘고 update 정책까지 열리는 QR 스펙 시점이 그 방법의 자리다.
+-- [권한 경계] 컬럼 단위 insert grant — ADR 0004 가 "QR 스펙 시점이 이 방법의 원래 자리"라며 미뤄둔 것
+--   이번에 채택한다. 위 with check 가 "값"을 검사한다면, 이 grant 는 "지정할 수 있는 컬럼 자체"를 못박는다.
+--   효과:
+--     - 앞으로 participations 에 어떤 컬럼이 추가되어도 학생은 그 컬럼을 쓸 수 없다 (fail-closed).
+--       정책 개정을 잊어도 구멍이 생기지 않는다 — 이번 스펙에서 실제로 컬럼 2개가 늘었고, 앞으로도 늘어난다.
+--     - ADR 0004 가 "알려진 틈"으로 수용했던 created_at / id 위조가 함께 닫힌다.
+--   주의:
+--     - 위반도 42501/403 이라 with check 위반과 구분되지 않는다. 프런트는 insert 에 student_id/program_id
+--       외 어떤 컬럼도 보내지 않는다(src/lib/programService.js applyToProgram 이미 그렇게 되어 있다).
+--     - RETURNING(supabase-js 의 .insert().select())은 select 권한을 쓰므로 계속 동작한다.
+--     - service_role 은 별도 역할이라 이 revoke 의 영향을 받지 않는다(시딩/리셋 무관).
+revoke insert on public.participations from authenticated;
+revoke insert on public.participations from anon;
+grant  insert (student_id, program_id) on public.participations to authenticated;
+
+-- [RLS 권한 경계] update/delete 정책 없음 = 기본 전체 거부 (학생·관리자 모두).
+--  >>> ADR 0005 의 핵심 결정이다. 이번 스펙에서 status/entry_at/exit_at/토큰을 쓰는 경로가 필요해졌지만,
+--      그 경로를 정책으로 열지 않고 security definer 함수 2개로만 열었다. 이유는 6번 절 함수 주석과 ADR 0005 2번.
+--      - 학생에게 열면: 스스로 completed 로 바꿔 QR 2회 인증을 통째로 우회한다(부정 적립).
+--      - 관리자에게 열면: RLS 는 컬럼 단위가 아니고 using(OLD)/with check(NEW)를 연결할 수단이 없어
+--        "student_id 는 그대로 두고 status 만 바꾸기"를 표현할 수 없다. 관리자가 남의 참여를 자기 학생으로
+--        옮기거나, 토큰 없이 completed 로 만들어 포인트를 찍어낼 수 있다.
+--  - 시연 리셋(delete)은 service_role 키로 수행한다.
 
 -- =========================================================
--- 참고: 데모 데이터(계정 6개, mentor_students 5행, 프로그램 16~20건)는 이 파일에 하드코딩하지 않는다.
---  - 계정: auth.users는 Supabase Auth Admin API로만 안전하게 생성 가능하므로 scripts/seed-accounts.mjs
---    (Node, service_role 키)에서 수행한다. 계정 목록의 단일 출처는 docs/specs/auth-login.md의
---    "확정된 데모 계정" 표. 학생의 career_interest 시드 값은 ADR 0003 "시드 설계" 참고
---    (앱에 계열 선택 UI가 없어 시딩이 유일한 입력 경로다).
---  - 프로그램: scripts/seed-programs.mjs (Node, service_role 키)에서 수행한다. 마이그레이션이 아니라
---    스크립트인 이유와 시드 요구사항(미게시/지난 날짜 행 포함, 날짜는 리터럴이 아닌 "오늘 ± n일" 상대값)은
---    ADR 0003 "시드 설계" 참고.
---  - participations: 시드 없음. 신청은 앱에서 학생이 직접 만든다 — 가짜 데이터를 하드코딩하지 않는다(ADR 0004).
+-- 5. point_transactions
+--    포인트 적립/전환 원장 (CLAUDE.md 5장). ADR 0005 확정 C-1.
+--
+--    [이 테이블의 존재 이유 절반은 unique 제약이다]
+--    "한 참여당 적립 정확히 1회"를 애플리케이션 로직이 아니라 DB 제약으로 표현할 자리다.
+--    재스캔·동시 스캔·네트워크 재시도가 두 번째 적립을 시도하면 23505 로 튕기고,
+--    verify_participation_qr() 은 그 예외를 잡아 트랜잭션 전체를 되돌린 뒤 already_completed 를 반환한다.
+-- =========================================================
+create table if not exists public.point_transactions (
+  id                       uuid primary key default gen_random_uuid(),
+  student_id               uuid not null references public.profiles(id) on delete cascade,
+  type                     point_transaction_type not null,
+  amount                   integer not null,
+  related_participation_id uuid references public.participations(id) on delete cascade,
+  created_at               timestamptz not null default now(),
+
+  -- 부호를 쓰지 않는다. 방향은 type 이 정한다(적립 = 증가, 전환 = 감소). 0P 거래는 의미가 없다.
+  constraint point_transactions_amount_positive check (amount > 0),
+
+  -- [확정 C-1 — 이중 지급 방어의 핵심] 한 참여당 최대 1건. NULL 은 여러 개 허용되므로
+  --   전환('전환') 거래는 이 제약에 걸리지 않는다.
+  constraint point_transactions_participation_unique unique (related_participation_id),
+
+  -- [절대 원칙 3·6장 가드를 DB 로 표현] 적립은 반드시 참여에서 나오고(= QR 퇴장 인증 없이는 적립이 불가능),
+  --   전환은 참여와 무관하다. "출처 없는 적립"이 원장에 남을 수 없다.
+  constraint point_transactions_source_rule check (
+    (type = '적립' and related_participation_id is not null)
+    or (type = '전환' and related_participation_id is null)
+  )
+);
+
+comment on table public.point_transactions is
+  '포인트 적립/전환 원장 (CLAUDE.md 5장). 이번 스코프에서는 public.verify_participation_qr() 의 퇴장 인증 성공 시 '
+  '적립 1행만 생성된다. 전환(포인트 -> 지역화폐 시뮬레이션)은 마이페이지 스펙 몫이며 이를 생성하는 코드가 아직 없다. '
+  '[RLS] 정책 0개 = 전체 거부. 학생도 아직 자기 내역을 조회하지 않는다(포인트 내역 화면이 없음) — '
+  '마이페이지 스펙에서 point_transactions_select_own(student_id = auth.uid())을 열 자리다.';
+comment on column public.point_transactions.amount is
+  '지급 시점의 programs.points 스냅샷이다. programs.points 를 나중에 관리자가 수정해도(ADR 0005 프로그램 관리) '
+  '이미 지급된 금액은 바뀌지 않는다 — 아카이브/포인트 내역은 programs.points 가 아니라 이 값을 읽어야 한다. '
+  '[원칙 1 가드] 랜덤·배수·연속 참여 보너스 같은 가산 규칙을 넣지 않는다. 정액 그대로다.';
+comment on column public.point_transactions.related_participation_id is
+  'unique 제약이 걸린 컬럼. on delete cascade 로 둔 이유: 시연 리셋(delete from participations)이 원장을 남기면 '
+  '"참여는 없는데 적립 기록만 있는" 상태가 된다. 리셋 시 profiles.points_* 초기화도 함께 해야 한다(participations comment 참고).';
+
+alter table public.point_transactions enable row level security;
+-- [RLS 권한 경계] 정책 0개 = 전체 거부 (학생·관리자 모두, select 포함).
+--   쓰기는 security definer 함수(verify_participation_qr)만 수행한다.
+--   >>> 학생에게 insert 를 열면 "직접 적립"이 가능해지고, 그건 이 테이블이 막으려던 바로 그 공격이다.
+--   >>> 관리자에게 select 를 열지 않는 이유: 담당 학생 아카이브는 "무슨 활동을 했는가"이지 "얼마 벌었는가"가 아니다
+--       (원칙 4 — 포트폴리오가 포인트보다 먼저). 아카이브의 포인트 표시는 programs.points 로 충분하다.
+
+-- =========================================================
+-- 6. 함수 (security definer) — 앱 최초의 update 경로 / 관리자 쓰기 / 포인트 지급
+--    ADR 0005 2·3번. 이 절은 이 파일에서 가장 조심해서 읽어야 하는 블록이다.
+--
+--    [왜 정책이 아니라 함수인가 — 요약]
+--      1) RLS 는 컬럼 단위가 아니다. using 은 OLD, with check 는 NEW 만 보고 둘을 연결할 수단이 없어
+--         "student_id 는 그대로, status 만 전이" 를 표현할 수 없다.
+--      2) "유효한 토큰을 제시했을 때만" 이라는 조건은 정책 표현식에 인자를 넘길 수 없어 표현 불가능하다.
+--      3) 포인트 지급은 남의 profiles 행을 수정한다. 정책으로 하려면 profiles 에 update 를 열어야 하는데,
+--         그건 학생이 자기 포인트를 고치는 문을 함께 여는 것이다.
+--      4) 상태 전이 + 원장 insert + 잔액 update 가 한 트랜잭션이어야 한다. 함수는 그 자체로 한 트랜잭션이다.
+--      5) 거부 사유를 구분해 돌려줘야 한다. 정책은 403/0행밖에 못 준다.
+--
+--    [security definer 취급 주의 — 전부 지킬 것]
+--      - set search_path = '' 로 고정한다. 검색 경로 하이재킹 방지. 사용자 객체는 전부 스키마 수식(public./auth.).
+--        (pg_catalog 는 항상 암묵적으로 먼저 검색되므로 내장 함수는 수식하지 않아도 안전하다.)
+--      - 정의자(소유자=postgres)로 실행되므로 이 함수들 안에서는 RLS 가 적용되지 않는다.
+--        >>> 즉 함수 본문이 곧 권한 경계 전부다. 함수 안에서 호출자 신원을 직접 검사한다.
+--      - execute 권한을 public 에서 회수하고 authenticated 에만 부여한다(기본값은 public 실행 허용이다).
+--      - [중요] Supabase 에서 학생과 관리자는 같은 DB 역할(authenticated)이다. grant 로 역할을 구분할 수 없으므로
+--        "관리자만" 은 반드시 함수 본문의 is_admin() 검사로 표현된다.
+-- =========================================================
+
+-- ---------------------------------------------------------
+-- 6-1. qr_normalize_token() — 입력 정규화 (수동 입력 fallback 확정 D-1)
+--
+-- 카메라로 읽은 토큰과 사람이 손으로 친 토큰이 "같은 문자열"이 되게 만든다.
+--   - 영숫자가 아닌 문자(공백·하이픈)를 전부 제거 -> 프런트가 읽기 좋게 "ABCDE FGHJK" 로 끊어 보여줘도 된다.
+--   - 대문자화.
+--   - Crockford 규칙대로 혼동 문자를 접는다: I, L -> 1 / O -> 0.
+--     (생성 알파벳에 I/L/O/U 가 없으므로 이 접기는 오탈자만 구제하고 충돌을 만들지 않는다.)
+-- ---------------------------------------------------------
+create or replace function public.qr_normalize_token(p_input text)
+returns text
+language sql
+immutable
+security invoker
+set search_path = ''
+as $$
+  select translate(
+           upper(regexp_replace(coalesce(p_input, ''), '[^0-9A-Za-z]', '', 'g')),
+           'ILO', '110'
+         );
+$$;
+
+comment on function public.qr_normalize_token(text) is
+  'QR/수동 입력 토큰 정규화. 구분자 제거 + 대문자화 + Crockford 혼동 문자 접기(I,L->1 / O->0). '
+  '수동 입력 fallback(확정 D-1)이 카메라와 완전히 동일한 검증 경로를 타게 만드는 장치다.';
+
+revoke all on function public.qr_normalize_token(text) from public;
+grant execute on function public.qr_normalize_token(text) to authenticated;
+
+-- ---------------------------------------------------------
+-- 6-2. qr_generate_token() — 토큰 생성 (내부 전용)
+--
+-- Crockford Base32(0-9 A-Z 에서 I, L, O, U 제외) 10자 = 명목상 50비트.
+--   - 난수원은 gen_random_uuid()(v4, CSPRNG). pgcrypto 의 gen_random_bytes 를 쓰지 않는 이유:
+--     Supabase 는 확장을 extensions 스키마에 설치하는데, search_path = '' 환경에서 그 위치가 환경마다 달라
+--     깨질 수 있다. gen_random_uuid() 는 PG13+ 내장(pg_catalog)이라 항상 안전하다.
+--   - uuid 32 hex 중 앞 20자(=10바이트)를 쓰고, 바이트마다 & 31 로 알파벳 인덱스를 만든다.
+--     32 는 256 의 약수라 모듈로 편향이 없다.
+--   - [정확히는 49비트다] uuid v4 는 7번째 바이트의 상위 니블이 버전값 '4' 로 고정돼 있어 그 한 글자만
+--     32 가지가 아니라 16 가지다. 아래 위협 모델상 무해하므로 uuid 를 잘라 쓰는 단순함을 유지한다.
+--   - [위협 모델] 스펙 이슈 3: 토큰 추측은 위협이 아니다(검증 RPC 는 관리자만 호출할 수 있고 관리자는 이미
+--     인증 권한자다). 이 비트 수는 우발적 충돌 방지가 목적이지 무차별 대입 방어가 목적이 아니다.
+-- ---------------------------------------------------------
+create or replace function public.qr_generate_token()
+returns text
+language plpgsql
+volatile
+security invoker
+set search_path = ''
+as $$
+declare
+  v_alphabet constant text := '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; -- 32문자. I, L, O, U 제외.
+  v_hex text;
+  v_out text := '';
+  i     integer;
+begin
+  v_hex := replace(gen_random_uuid()::text, '-', '');
+  for i in 0..9 loop
+    v_out := v_out || substr(v_alphabet, 1 + (('x' || substr(v_hex, i * 2 + 1, 2))::bit(8)::integer & 31), 1);
+  end loop;
+  return v_out;
+end;
+$$;
+
+comment on function public.qr_generate_token() is
+  'QR 1회용 토큰 생성(Crockford Base32 10자). 내부 전용 — 클라이언트에서 호출할 일이 없으므로 execute 를 아무에게도 주지 않는다. '
+  '토큰을 클라이언트가 만들면 학생이 자기가 아는 값을 심을 수 있고, 그것은 ADR 0004 가 entry_token is null 로 막아둔 공격과 같다.';
+
+revoke all on function public.qr_generate_token() from public;
+-- grant 없음: security definer 함수(issue_participation_qr) 안에서 소유자 권한으로만 호출된다.
+
+-- ---------------------------------------------------------
+-- 6-3. issue_participation_qr() — 학생 본인의 입장/퇴장 토큰 발급
+--
+-- [RPC 권한 경계] issue_participation_qr(p_participation_id uuid, p_type text)
+--   호출 가능: authenticated (본문에서 "본인 참여 건" 인지 다시 검사한다)
+--   허용 대상: participations.student_id = auth.uid() 인 행만
+--   쓰는 컬럼: entry_token + entry_token_expires_at  또는  exit_token + exit_token_expires_at  둘 중 하나뿐.
+--   >>> status / entry_at / exit_at / student_id 를 절대 쓰지 않는다. 즉 학생이 이 함수를 아무리 호출해도
+--       참여 상태는 1mm 도 진행되지 않는다. 상태 전이는 관리자 스캔(6-5)에서만 일어난다.
+--   불가능: 남의 참여 건 토큰 발급(42501), 없는 id 존재 여부 탐지(같은 42501 로 구분 불가하게 처리),
+--           completed 건 재발급, 상태에 맞지 않는 타입 발급(입장 전 퇴장 토큰)
+--
+-- [재발급 정책] 호출할 때마다 새 토큰으로 덮어쓴다(= 이전 토큰 즉시 무효, 만료 30분 재시작).
+--   "다시 발급받기" 버튼과 목록의 QR 버튼이 같은 동작이라 분기가 없다. 이전 토큰은 어느 행과도 매칭되지 않아
+--   not_found 로 거부된다(만료와 다른 사유로 뜨는데, 어차피 학생이 방금 새로 받은 상태라 혼동이 없다).
+-- ---------------------------------------------------------
+create or replace function public.issue_participation_qr(p_participation_id uuid, p_type text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_student uuid := auth.uid();
+  v_p       public.participations%rowtype;
+  v_token   text;
+  v_expires timestamptz;
+  v_try     integer := 0;
+begin
+  if v_student is null then
+    raise exception '인증되지 않은 호출입니다.' using errcode = '42501';
+  end if;
+
+  if p_type is null or p_type not in ('entry', 'exit') then
+    raise exception '토큰 종류는 entry 또는 exit 여야 합니다.' using errcode = '22023';
+  end if;
+
+  -- 본인 행만. for update 로 잠가 동시 발급 요청을 직렬화한다.
+  -- [존재 여부를 노출하지 않는다] "없는 id" 와 "남의 id" 를 같은 예외로 처리한다.
+  select * into v_p
+    from public.participations
+   where id = p_participation_id
+     and student_id = v_student
+   for update;
+
+  if not found then
+    raise exception '본인의 참여 건이 아닙니다.' using errcode = '42501';
+  end if;
+
+  if v_p.status = 'completed' then
+    return jsonb_build_object('ok', false, 'reason', 'already_completed');
+  end if;
+  if p_type = 'entry' and v_p.status <> 'applied' then
+    return jsonb_build_object('ok', false, 'reason', 'wrong_order');
+  end if;
+  if p_type = 'exit' and v_p.status <> 'entered' then
+    -- 입장 인증 없이 퇴장 토큰을 만들려는 시도. 화면에서도 버튼이 안 뜨지만 서버가 다시 막는다.
+    return jsonb_build_object('ok', false, 'reason', 'wrong_order');
+  end if;
+
+  -- 컬럼 간 충돌까지 막는다(unique 제약은 컬럼 안에서만 유일성을 보장한다).
+  loop
+    v_try := v_try + 1;
+    v_token := public.qr_generate_token();
+    exit when not exists (
+      select 1 from public.participations
+       where entry_token = v_token or exit_token = v_token
+    );
+    if v_try >= 5 then
+      raise exception '토큰 생성에 실패했습니다.' using errcode = '55000';
+    end if;
+  end loop;
+
+  v_expires := now() + interval '30 minutes'; -- CLAUDE.md 6장. now() 는 트랜잭션 시작 시각.
+
+  if p_type = 'entry' then
+    update public.participations
+       set entry_token = v_token, entry_token_expires_at = v_expires
+     where id = v_p.id;
+  else
+    update public.participations
+       set exit_token = v_token, exit_token_expires_at = v_expires
+     where id = v_p.id;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'participation_id', v_p.id,
+    'type', p_type,
+    'token', v_token,
+    'expires_at', v_expires
+  );
+end;
+$$;
+
+comment on function public.issue_participation_qr(uuid, text) is
+  '학생 본인의 QR 토큰 발급(30분 만료, 호출마다 재발급). 반환 jsonb 로 프런트가 QR payload '
+  '{participation_id, type, expires_at, token} 을 만든다(CLAUDE.md 6장). '
+  '이 함수는 status/entry_at/exit_at 을 쓰지 않는다 — 학생이 스스로 참여를 진행시킬 수 있는 경로가 없다는 뜻이다.';
+
+revoke all on function public.issue_participation_qr(uuid, text) from public;
+grant execute on function public.issue_participation_qr(uuid, text) to authenticated;
+
+-- ---------------------------------------------------------
+-- 6-4. verify_participation_qr() — 관리자 스캔: 토큰 검증 + 상태 전이 + 포인트 지급
+--
+-- [RPC 권한 경계] verify_participation_qr(p_token text)
+--   호출 가능: authenticated 이면서 본문의 is_admin() 검사를 통과한 호출자만. 학생이 호출하면 42501/403.
+--   허용 대상: 토큰이 가리키는 참여 건의 programs.created_by = auth.uid() 인 경우만 (확정 H-1).
+--             created_by 가 NULL 이면 거부(fail-closed).
+--   쓰는 컬럼: participations.status/entry_at 또는 status/exit_at + point_transactions 1행 + profiles.points_*.
+--   >>> student_id / program_id / 토큰 컬럼을 절대 쓰지 않는다. 관리자가 참여 건의 주인을 바꿀 수 있는
+--       경로는 앱 어디에도 없다 — 정책이 아니라 "이 update 문의 SET 목록"이 그 경계다.
+--   불가능: 남의 프로그램 참여 건 인증(not_authorized), 만료/재사용 토큰 통과, 순서 뒤집기,
+--           이중 지급(participations CAS + point_transactions unique 이중 방어),
+--           목록 조회(이 함수는 스캔한 그 한 건만 돌려준다 — 관리자에게 participations select 를 열지 않는 이유)
+--
+-- [입장/퇴장을 한 함수로 합친 이유] 카메라는 어떤 종류의 QR 이 들어올지 미리 알 수 없다. 토큰 자체가
+--   종류를 결정해야 하므로 분리하면 프런트가 payload 의 type 을 믿고 함수를 골라야 하는데, 그건 검증 판정을
+--   위조 가능한 payload 에 의존시키는 것이다.
+--
+-- [반환 jsonb]
+--   { ok, reason, type, student_name, program_title, points_awarded, at }
+--   - 실패 시 reason: expired | used | not_found | wrong_order | already_completed | not_authorized
+--   - [정보 노출 검토] not_found / not_authorized 에는 학생·프로그램 정보를 일절 싣지 않는다.
+--     나머지 사유는 "본인이 만든 프로그램" 이라는 확인을 통과한 뒤에만 도달하므로 이름/프로그램명을 함께 준다
+--     (관리자가 학생에게 "다시 발급해 주세요" 라고 말할 수 있어야 한다 — 스펙 요구사항).
+--   - not_authorized 가 "유효한 토큰이 존재한다" 는 사실을 알려주긴 하지만, 호출자는 이미 인증된 관리자이고
+--     그 사실만으로는 누구의 무엇인지 알 수 없다. 사유 구분(스펙 필수)을 포기할 만한 이득이 없다.
+-- ---------------------------------------------------------
+create or replace function public.verify_participation_qr(p_token text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_admin   uuid := auth.uid();
+  v_token   text;
+  v_kind    text;
+  v_p       public.participations%rowtype;
+  v_prog    public.programs%rowtype;
+  v_name    text;
+  v_base    jsonb;
+  v_rows    integer;
+  v_points  integer;
+  v_now     timestamptz := now();
+begin
+  -- (1) 호출자 신원. 정책이 아니라 여기가 "관리자 전용" 의 유일한 표현이다(학생/관리자가 같은 DB 역할이므로).
+  if v_admin is null then
+    raise exception '인증되지 않은 호출입니다.' using errcode = '42501';
+  end if;
+  if not public.is_admin() then
+    raise exception '관리자만 호출할 수 있습니다.' using errcode = '42501';
+  end if;
+
+  v_token := public.qr_normalize_token(p_token);
+  if length(v_token) <> 10 then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  -- (2) 토큰 -> 참여 행. entry_token 을 먼저 보고, 없으면 exit_token.
+  --     for update 로 잠근다: 동시 스캔 2건 중 하나만 전이에 성공하고, 다른 하나는 잠금 해제 후
+  --     갱신된 status 를 다시 읽어 used/already_completed 로 떨어진다.
+  select * into v_p from public.participations where entry_token = v_token for update;
+  if found then
+    v_kind := 'entry';
+  else
+    select * into v_p from public.participations where exit_token = v_token for update;
+    if found then
+      v_kind := 'exit';
+    end if;
+  end if;
+
+  if v_kind is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  -- (3) 확정 H-1: 본인이 올린 프로그램의 참여 건만. created_by 가 NULL 이면 거부(fail-closed).
+  select * into v_prog from public.programs where id = v_p.program_id;
+  if not found or v_prog.created_by is null or v_prog.created_by <> v_admin then
+    return jsonb_build_object('ok', false, 'reason', 'not_authorized');
+  end if;
+
+  -- 여기서부터는 "본인 프로그램" 이 확인된 뒤라 학생/프로그램 정보를 실어도 된다.
+  select p.name into v_name from public.profiles p where p.id = v_p.student_id;
+  v_base := jsonb_build_object('type', v_kind, 'student_name', v_name, 'program_title', v_prog.title);
+
+  if v_p.status = 'completed' then
+    return v_base || jsonb_build_object('ok', false, 'reason', 'already_completed');
+  end if;
+
+  if v_kind = 'entry' then
+    -- 입장 토큰은 status=applied 일 때만 소비된다. 이미 entered 면 그 토큰은 쓰인 것이다.
+    if v_p.status <> 'applied' then
+      return v_base || jsonb_build_object('ok', false, 'reason', 'used');
+    end if;
+    if v_p.entry_token_expires_at is null or v_p.entry_token_expires_at <= v_now then
+      return v_base || jsonb_build_object('ok', false, 'reason', 'expired');
+    end if;
+
+    update public.participations
+       set status = 'entered', entry_at = v_now
+     where id = v_p.id
+       and status = 'applied';          -- CAS: 동시 스캔에서 한 번만 성공한다
+    get diagnostics v_rows = row_count;
+    if v_rows <> 1 then
+      return v_base || jsonb_build_object('ok', false, 'reason', 'used');
+    end if;
+
+    return v_base || jsonb_build_object('ok', true, 'reason', null, 'at', v_now);
+  end if;
+
+  -- v_kind = 'exit'
+  if v_p.status = 'applied' then
+    return v_base || jsonb_build_object('ok', false, 'reason', 'wrong_order');
+  end if;
+  if v_p.exit_token_expires_at is null or v_p.exit_token_expires_at <= v_now then
+    return v_base || jsonb_build_object('ok', false, 'reason', 'expired');
+  end if;
+
+  -- [지급액은 서버가 DB 에서 읽는다] 클라이언트가 보낸 값을 쓰지 않는다. 이 값이 원장에 스냅샷으로 남는다.
+  v_points := v_prog.points;
+
+  -- [상태 전이 + 원장 + 잔액 = 한 트랜잭션]
+  --   중간 실패 시 서브트랜잭션 전체가 롤백되므로 "포인트만 오르고 completed 가 안 되는" 상태가 생기지 않는다.
+  begin
+    update public.participations
+       set status = 'completed', exit_at = v_now
+     where id = v_p.id
+       and status = 'entered';          -- CAS
+    get diagnostics v_rows = row_count;
+    if v_rows <> 1 then
+      return v_base || jsonb_build_object('ok', false, 'reason', 'already_completed');
+    end if;
+
+    -- 2차 방어선. 위 CAS 를 어떤 이유로든 통과했더라도 한 참여당 적립은 1건뿐이다(unique).
+    insert into public.point_transactions (student_id, type, amount, related_participation_id)
+    values (v_p.student_id, '적립', v_points, v_p.id);
+
+    update public.profiles
+       set points_balance = points_balance + v_points,
+           points_total   = points_total   + v_points
+     where id = v_p.student_id;
+  exception
+    when unique_violation then
+      -- 이미 적립된 참여. 이 블록의 상태 전이까지 함께 롤백되고 포인트는 늘지 않는다.
+      return v_base || jsonb_build_object('ok', false, 'reason', 'already_completed');
+  end;
+
+  return v_base || jsonb_build_object('ok', true, 'reason', null, 'points_awarded', v_points, 'at', v_now);
+end;
+$$;
+
+comment on function public.verify_participation_qr(text) is
+  '관리자 QR 스캔 검증. 성공 시 입장(status=entered) 또는 퇴장(status=completed + 포인트 지급)을 한 트랜잭션으로 처리한다. '
+  '카메라 스캔과 수동 코드 입력(확정 D-1)이 모두 이 함수 하나를 호출한다 — 입력 수단만 다르고 검증은 동일하다(원칙 5 훼손 아님). '
+  '관리자에게 participations/profiles select 정책을 열지 않는 대신, 방금 스캔한 한 건의 학생 이름과 프로그램명을 반환값으로만 준다.';
+
+revoke all on function public.verify_participation_qr(text) from public;
+grant execute on function public.verify_participation_qr(text) to authenticated;
+
+-- =========================================================
+-- 7. 관리자 권한 경계 정책 (ADR 0005 확정 G-3 — 관리자 기능 3종)
+--
+--    [행 경계는 두 축뿐이다. 새 축을 만들지 말 것]
+--      축 A) programs.created_by = auth.uid()          -> 프로그램 관리 + QR 스캔(H-1). "내가 운영하는 프로그램"
+--      축 B) mentor_students(admin_id = auth.uid())    -> 담당 학생 아카이브. "내가 멘토링하는 학생"
+--    두 축은 목적이 다르다(운영 vs 멘토링). 한쪽 축을 다른 쪽 기능에 쓰지 않는다.
+--
+--    [delete 를 어느 테이블에도 열지 않는다]
+--      CLAUDE.md 10장의 관리자 기능은 "올리기/내리기/수정" 이고 내리기는 is_published=false 토글이지 삭제가 아니다.
+--      programs delete 를 열면 on delete cascade 로 학생의 participations 와 point_transactions 까지 사라지는데,
+--      profiles.points_* 는 그대로 남아 잔액과 원장이 어긋난다. 삭제는 시연 리셋(service_role) 전용으로 둔다.
+-- =========================================================
+
+-- ---------------------------------------------------------
+-- 7-1. 프로그램 관리 (축 A)
+-- ---------------------------------------------------------
+
+-- [RLS 권한 경계] programs_select_own_as_admin
+--   대상 역할: authenticated
+--   허용 행: created_by = auth.uid() 인 행 (게시 여부 무관)
+--   효과: 관리자는 "게시된 전부(programs_select_published) + 본인이 만든 미게시" 를 본다. 정책은 OR 로 합쳐진다.
+--   불가능: 다른 관리자가 만든 미게시 행 조회. created_by 가 NULL 인 미게시 행 조회(NULL = auth.uid() 는 참이 아니다).
+--   [ADR 0004 가 예고한 함정 재검토 결과] 이 정책 때문에 participations_insert_own 의 서브쿼리가 관리자에게
+--   자기 미게시 프로그램을 보여주게 되지만, 그 서브쿼리에 p.is_published = true 가 명시돼 있어 결과는 여전히 거부다.
+--   그 명시가 없었다면 관리자가 자기 미게시 프로그램에 자기 이름으로 신청할 수 있었다.
+create policy "programs_select_own_as_admin"
+  on public.programs
+  for select
+  to authenticated
+  using (created_by = auth.uid());
+
+-- [RLS 권한 경계] programs_insert_own_as_admin
+--   대상 역할: authenticated + is_admin()
+--   허용 행: created_by = auth.uid() 인 행만
+--   불가능: 학생의 프로그램 등록(is_admin() 이 막는다 — 이 절이 없으면 학생이 created_by=본인 으로 프로그램을
+--           만들 수 있고, 그러면 자기 프로그램에 자기가 신청하고 자기 QR 을 자기가 인증하는 폐루프가 생긴다),
+--           남의 이름으로 등록(created_by 위조), created_by 를 NULL 로 둔 등록(고아 프로그램 = 아무도 스캔 못 함)
+--   [points 규칙] 150~3000, 끝자리 0 은 테이블 CHECK(programs_points_rule)가 담당한다. 정책에 중복해 넣지 않는다.
+create policy "programs_insert_own_as_admin"
+  on public.programs
+  for insert
+  to authenticated
+  with check (public.is_admin() and created_by = auth.uid());
+
+-- [RLS 권한 경계] programs_update_own_as_admin
+--   대상 역할: authenticated + is_admin()
+--   허용 행: created_by = auth.uid() 인 행. 수정 후에도 created_by = auth.uid() 여야 한다(with check).
+--   용도: 올리기/내리기(is_published 토글) + 내용 수정
+--   불가능: 남의 프로그램 수정, 소유권 이전(created_by 를 남에게 넘기거나 NULL 로 만들기 — with check 가 막는다)
+--   [수용하는 것 — RLS 는 컬럼 단위가 아니다] 관리자는 본인 프로그램의 모든 컬럼을 바꿀 수 있다(points 포함).
+--     이것이 부정 적립 경로가 되지 않는 이유:
+--       (a) 지급액은 지급 시점의 값이 point_transactions.amount 에 스냅샷으로 남는다. 나중에 points 를 올려도
+--           이미 지급된 금액은 변하지 않는다.
+--       (b) 관리자는 participations 를 만들 수 없다(insert 정책이 student_id = auth.uid() 를 요구한다).
+--           즉 "포인트 3000P 짜리 프로그램을 만들고 스스로 참여를 꽂아 완료 처리" 하는 폐루프가 성립하지 않는다.
+--           관리자가 학생 계정으로 신청하는 것은 가능하지만 그건 학생 계정의 권한이고, 그때도 QR 2회 인증이 필요하다.
+--       (c) points 상한 3000P 는 테이블 CHECK 가 막는다.
+create policy "programs_update_own_as_admin"
+  on public.programs
+  for update
+  to authenticated
+  using      (public.is_admin() and created_by = auth.uid())
+  with check (public.is_admin() and created_by = auth.uid());
+
+-- [RLS 권한 경계] programs delete 정책 없음 = 전체 거부 (위 7번 절 상단 근거 참고).
+
+-- ---------------------------------------------------------
+-- 7-2. 담당 학생 아카이브 (축 B) — "남의 profiles 를 볼 수 있는 최초의 경로"
+-- ---------------------------------------------------------
+
+-- [RLS 권한 경계] mentor_students_select_own_as_admin
+--   대상 역할: authenticated
+--   허용 행: admin_id = auth.uid() 인 행 (= 내가 담당하는 학생 매핑)
+--   불가능: 학생이 "내 멘토가 누구인지" 조회(student_id 축 정책 없음), 다른 관리자의 담당 목록 조회
+--   [이 정책에 profiles 조인을 넣지 말 것] 아래 profiles 정책이 이 테이블을 참조하므로, 여기서 profiles 를
+--   참조하면 두 정책이 서로를 부르는 순환이 된다. 관리자 여부 검사는 아래 profiles/participations 정책의
+--   is_admin()(security definer, RLS 우회)이 담당한다.
+create policy "mentor_students_select_own_as_admin"
+  on public.mentor_students
+  for select
+  to authenticated
+  using (admin_id = auth.uid());
+
+-- [RLS 권한 경계] profiles_select_mentored_students_as_admin   <<< 이 파일에서 가장 조심할 select 정책
+--   대상 역할: authenticated + is_admin()
+--   허용 행: mentor_students 에 (admin_id = 나, student_id = 그 행) 매핑이 있는 profiles 행 (데모 기준 5명)
+--   용도: 담당 학생 아카이브의 이름·학번 표시 (CLAUDE.md 10장)
+--   불가능: 학생이 다른 학생의 profiles 조회(is_admin() 이 즉시 거짓),
+--           관리자 A 가 관리자 B 의 담당 학생 조회(admin_id 축),
+--           담당이 아닌 학생 조회, 다른 관리자의 profiles 조회
+--   [수용하는 것 — RLS 는 컬럼 단위가 아니다] 이 정책은 담당 학생 행의 모든 컬럼(points_balance 포함)을 연다.
+--     컬럼 단위 grant 로 좁힐 수 없다: Supabase 에서 학생과 관리자가 같은 DB 역할(authenticated)이라
+--     컬럼 grant 를 걸면 학생 본인 조회까지 함께 막힌다. 좁히려면 아카이브 전체를 definer RPC 로 옮겨야 하는데,
+--     "조회는 RLS, 쓰기는 RPC" 라는 이 프로젝트의 구조를 아카이브 하나 때문에 깨는 비용이 더 크다고 판단했다.
+--     >>> [원칙 1 가드 — frontend 필수] 담당 학생들의 포인트를 나란히 놓고 비교/정렬/순위로 렌더하지 말 것.
+--         아카이브는 학생 1명 단위의 활동 기록 화면이다.
+--   [재귀 없음] is_admin() 은 security definer 라 profiles 의 RLS 를 타지 않는다. 이 함수 없이 정책 안에서
+--     profiles 를 직접 select 하면 Postgres 가 정책 재귀 에러를 낸다.
+create policy "profiles_select_mentored_students_as_admin"
+  on public.profiles
+  for select
+  to authenticated
+  using (
+    public.is_admin()
+    and exists (
+      select 1
+      from public.mentor_students ms
+      where ms.admin_id = auth.uid()
+        and ms.student_id = profiles.id
+    )
+  );
+
+-- [RLS 권한 경계] participations_select_mentored_as_admin
+--   대상 역할: authenticated + is_admin()
+--   허용 행: 담당 학생(축 B)의 행이면서 status = 'completed' 인 행만
+--   용도: 담당 학생 아카이브 = 완료한 활동 목록
+--   불가능: 담당이 아닌 학생의 참여 조회, 담당 학생의 미완료(applied/entered) 참여 조회,
+--           전교생 참여 목록/집계 조회
+--   [status = 'completed' 를 정책에 넣는 이유 — UX 규칙이 아니라 노출 범위 결정이다]
+--     "무엇을 신청했다가 안 갔는가" 는 아카이브가 보여줄 정보가 아니라 학생의 사생활에 가깝다.
+--     아카이브 화면이 어떤 필터를 걸든 DB 가 완료분 외에는 내려주지 않는 편이 경계가 명확하다.
+--     ADR 0004 가 "권한 경계는 DB, 신청 가능 여부는 프런트" 로 그은 선의 DB 쪽에 해당한다.
+--   [원칙 1 가드가 여전히 구조로 성립한다] 관리자가 볼 수 있는 참여는 담당 5명의 완료분뿐이라,
+--     프로그램별 참여자 수·출석률·전교생 랭킹은 애초에 데이터를 얻을 수 없다.
+create policy "participations_select_mentored_as_admin"
+  on public.participations
+  for select
+  to authenticated
+  using (
+    public.is_admin()
+    and status = 'completed'
+    and exists (
+      select 1
+      from public.mentor_students ms
+      where ms.admin_id = auth.uid()
+        and ms.student_id = participations.student_id
+    )
+  );
+
+-- [PDF 확인 — 새 권한 0개]
+--   담당 학생 아카이브 PDF 는 위 정책들로 이미 조회한 데이터를 클라이언트에서 렌더/인쇄한다.
+--   서버 렌더가 필요하다는 결론이 나오면 그것은 service_role 을 쓰겠다는 뜻이므로 RLS 밖으로 나가는 설계다 — 금지.
+
+-- =========================================================
+-- 참고: 데모 데이터(계정 6개, mentor_students 5행, 프로그램 20건)는 이 파일에 하드코딩하지 않는다.
+--  - 계정 + mentor_students: scripts/seed-accounts.mjs (Node, service_role)
+--  - 프로그램: scripts/seed-programs.mjs (Node, service_role)
+--    [ADR 0005] 관리자 홈 "오늘 진행 프로그램" 이 항상 비지 않도록 dayOffset = 0 인 프로그램이 2건 필요하다
+--    (교내 1 + 교외 1). 상세 지시는 ADR 0005 "구현 가이드 → backend-agent".
+--  - participations / point_transactions: 시드 없음. 신청은 학생이, 완료·적립은 QR 인증이 만든다.
 --  - 실행 순서: 마이그레이션 -> seed-accounts.mjs -> seed-programs.mjs
+--  - [시연 리셋] service_role 로:
+--      delete from public.participations;                                  -- point_transactions 함께 삭제됨(cascade)
+--      update public.profiles set points_balance = 0, points_total = 0;    -- 잔액도 함께 되돌려야 정합이 맞는다
 -- =========================================================
