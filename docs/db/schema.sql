@@ -425,5 +425,3 @@ create policy "participations_insert_own"
 --  - participations: 시드 없음. 신청은 앱에서 학생이 직접 만든다 — 가짜 데이터를 하드코딩하지 않는다(ADR 0004).
 --  - 실행 순서: 마이그레이션 -> seed-accounts.mjs -> seed-programs.mjs
 -- =========================================================
-</content>
-</invoke>

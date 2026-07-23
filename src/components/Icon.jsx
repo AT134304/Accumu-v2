@@ -214,6 +214,62 @@ const ICONS = {
       <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
     ),
   },
+  // 프로토타입 스프라이트 499줄 — 프로그램 선택 화면 검색 입력
+  'ic-search': {
+    content: (
+      <>
+        <circle cx="10.5" cy="10.5" r="6.4" fill="none" stroke="currentColor" strokeWidth="2.2" />
+        <path d="m15.4 15.4 5.1 5.1" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+      </>
+    ),
+  },
+  // 프로토타입 500줄 — 정렬 드롭다운 (인기순/최신순/포인트순)
+  'ic-sort': {
+    content: (
+      <>
+        <path
+          d="M7 4.5v15M7 19.5l-3-3M7 4.5l3 3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          opacity=".4"
+          d="M17 19.5v-15M17 4.5l3 3M17 19.5l-3-3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </>
+    ),
+  },
+  // 프로토타입 503줄 — "학교 내 활동" 그룹 헤더
+  'ic-school': {
+    content: (
+      <>
+        <path d="M12 3 22 8l-10 5L2 8l10-5z" />
+        <path opacity=".34" d="M6 11.2v4.4c0 1.5 2.7 2.9 6 2.9s6-1.4 6-2.9v-4.4l-6 3-6-3z" />
+      </>
+    ),
+  },
+  // 프로토타입 1358줄 — 토스트 아이콘.
+  // [이모지 금지] 프로토타입 toast()는 체크마크 이모지 문자를 넘겼지만 CLAUDE.md 8장 위반이라 duotone SVG로 대체한다.
+  'ic-check': {
+    content: (
+      <path
+        d="M5 12.5 10 17.5 19.5 7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    ),
+  },
 };
 
 /**

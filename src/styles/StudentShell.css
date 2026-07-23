@@ -93,6 +93,46 @@ h2.sec { font-size: clamp(20px, 3.4vw, 23px); font-weight: 800; letter-spacing: 
 .calhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .cal-today { font-size: 12.5px; font-weight: 700; color: var(--brand-dk); }
 
+/* ---------- 참여 신청 팝업 (프로토타입 .mthumb/.mtag/.statusline/.infogrid/.mbtn 221~242줄) ----------
+   .mthumb는 이후 다른 팝업에서도 재사용될 수 있어 .modal 하위에 두고,
+   제목 여백 등 참여 팝업 고유 값만 .join-modal로 좁힌다 (알림/캘린더 팝업의 h3에 영향 주지 않도록). */
+.modal .mthumb { height: 120px; display: grid; place-items: center; position: relative; }
+.join-modal .mtag {
+  font-size: 11px; font-weight: 700; color: var(--brand-dk); background: var(--brand-soft);
+  padding: 4px 10px; border-radius: 20px; display: inline-block;
+}
+.join-modal h3 { margin: 11px 0 6px; }
+.join-modal .desc { font-size: 14px; color: var(--ink2); line-height: 1.6; }
+
+.statusline { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; font-size: 13px; flex-wrap: wrap; }
+/* 상태 배지 — taxonomy.js STATUS[].cls (b-ok/b-ing/b-wait/b-close/b-over). 초록 계열 없음 */
+.badge { font-size: 11.5px; font-weight: 700; padding: 5px 11px; border-radius: 20px; }
+.b-ok { background: var(--brand-soft); color: var(--brand-dk); }
+.b-ing { background: var(--indigo-soft); color: var(--indigo); }
+.b-wait { background: var(--amber-soft); color: var(--amber); }
+.b-full, .b-close { background: #EEF1F6; color: var(--ink2); }
+.b-over { background: var(--rose-soft); color: var(--rose); }
+
+.infogrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+.infogrid .it { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.infogrid .it.wide { grid-column: 1 / -1; }
+.infogrid .it .k { font-size: 11.5px; color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 5px; }
+.infogrid .it .k .isvg { color: var(--muted); }
+.infogrid .it .v { font-size: 15px; font-weight: 800; margin-top: 4px; }
+/* 포인트 amber는 이 1칸에서만 (절대 원칙 4) */
+.infogrid .it .v.pt { color: var(--amber); }
+.infogrid .it .v .sub { font-size: 12px; color: var(--muted); font-weight: 600; }
+
+.modal .mbtn {
+  width: 100%; height: 50px; border-radius: 12px; background: var(--brand); color: #fff;
+  font-weight: 800; font-size: 15.5px; transition: .16s; display: flex; align-items: center;
+  justify-content: center; gap: 8px;
+}
+.modal .mbtn:hover:not(:disabled) { background: var(--brand-dk); }
+.modal .mbtn:disabled { background: var(--bg2); color: var(--muted); cursor: not-allowed; }
+/* 신청 실패는 조용히 넘어가지 않는다 (스펙 기능 요구사항) */
+.join-err { margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--rose); text-align: center; }
+
 /* ---------- placeholder 화면 ---------- */
 .ph-panel {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
@@ -121,4 +161,5 @@ h2.sec { font-size: clamp(20px, 3.4vw, 23px); font-weight: 800; letter-spacing: 
 @media (max-width: 430px) {
   .nav { gap: 10px; }
   .logo .word { font-size: 18px; }
+  .infogrid { grid-template-columns: 1fr; } /* 프로토타입 454줄 */
 }

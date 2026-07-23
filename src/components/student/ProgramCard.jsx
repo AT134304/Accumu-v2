@@ -1,18 +1,23 @@
 // Accumu v2 — 프로그램 카드 (Accumu_prototype.html pcardHTML() 815줄 재현)
 // 표시 필드: category(그룹·표시명 태그) / title / org / date / time / points / status / isMatched
-// popularity는 표시하지 않는다 (ADR 0003 — 이번 스코프에서 표시·정렬 어디에도 쓰지 않음).
+//           + joined(신청됨) / past(날짜 지남) — 버튼 라벨·비활성에만 쓴다.
+// [원칙 가드] popularity는 화면에 절대 표시하지 않는다 — 프로그램 선택 화면에서 "인기순" 정렬의 입력으로만
+//   쓰이며, 신청자 수·순위 라벨도 만들지 않는다 (CLAUDE.md 2장 1번).
 import Icon from '../Icon';
 import { catOf, statusOf } from '../../lib/taxonomy';
 import { fmtDate } from '../../lib/date';
 
-export default function ProgramCard({ program, onOpen }) {
+export default function ProgramCard({ program, onOpen, joined = false, past = false }) {
   const c = catOf(program.category);
   const st = statusOf(program.status);
 
-  // 프로토타입은 isJoined/isCompleted로 '신청됨'/'참여 완료'도 구분하지만,
-  // participations 테이블이 없어 이번엔 status만으로 라벨/비활성을 정한다.
-  const label = st.join ? '참여' : st.label;
-  const disabled = !st.join;
+  // 라벨 우선순위: 신청됨 > 종료됨 > status 라벨. (프로토타입의 '참여 완료'는 QR 퇴장 인증이 생긴 뒤 몫이라
+  // 이번 스코프에 등장하지 않는다 — "신청됨" 판정은 participations 행의 존재 여부로만 한다. ADR 0004 구현 가이드 4번)
+  // past는 확정 H-1(지난 날짜 신청 차단)을 카드 버튼에도 반영한 것이다. 프로토타입은 날짜를 보지 않아
+  // 과거 프로그램에도 '참여' 버튼이 활성으로 남는 버그가 있다 — 재현하지 않는다.
+  // 카드 본체 클릭은 계속 팝업을 열 수 있다(지난 활동도 상세는 볼 수 있어야 한다). 버튼만 잠근다.
+  const label = joined ? '신청됨' : past ? '종료됨' : st.join ? '참여' : st.label;
+  const disabled = joined || past || !st.join;
 
   return (
     <div
