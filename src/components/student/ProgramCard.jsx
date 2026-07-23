@@ -63,10 +63,14 @@ export default function ProgramCard({ program, onOpen, joined = false, past = fa
             +{program.points}
             <em>P</em>
           </div>
+          {/* [disabled 대신 aria-disabled] disabled 버튼은 click 이벤트 자체가 발생하지 않아 부모 카드의
+              onClick 도 타지 않는다 = 버튼 영역만 클릭이 죽는 구멍이 생긴다. 위 주석대로 "지난/신청한 활동도
+              상세는 볼 수 있어야" 하므로, 잠그는 것은 '신청 동작'이지 '팝업 열기'가 아니다.
+              신청 차단은 JoinModal 의 CTA(및 RLS)가 담당하고 여기서는 시각적 비활성 + 스크린리더 고지만 한다. */}
           <button
             type="button"
             className="join-btn"
-            disabled={disabled}
+            aria-disabled={disabled}
             onClick={(e) => {
               e.stopPropagation();
               onOpen();

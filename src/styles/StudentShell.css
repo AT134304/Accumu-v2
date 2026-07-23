@@ -163,3 +163,44 @@ h2.sec { font-size: clamp(20px, 3.4vw, 23px); font-weight: 800; letter-spacing: 
   .logo .word { font-size: 18px; }
   .infogrid { grid-template-columns: 1fr; } /* 프로토타입 454줄 */
 }
+
+/* ============ 프로그램 카드 (공용) ============
+   ProgramCard 는 홈(.cards-row 그리드)과 프로그램 선택 화면(.strip 가로 스크롤) 양쪽에서 쓴다.
+   그래서 홈 전용 StudentHome.css 가 아니라 학생 셸(전 학생 화면 공용)에 둔다 —
+   홈 CSS 에 두면 라우트를 lazy 분할하는 순간 /student/programs 의 카드가 무스타일로 뜬다. */
+.pcard {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden;
+  box-shadow: var(--shadow); transition: .2s; cursor: pointer; display: flex; flex-direction: column;
+}
+.pcard:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--line2); }
+.pcard:focus-visible { outline: none; border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
+.pcard .thumb { height: 108px; position: relative; display: grid; place-items: center; }
+.pcard .thumb .tag {
+  position: absolute; top: 10px; left: 10px; font-size: 10.5px; font-weight: 700;
+  padding: 4px 9px; border-radius: 20px; background: rgba(255, 255, 255, .92); color: var(--ink2);
+}
+/* 계열 매칭 배지 — brand blue (개인화 표시, 보상 아님) */
+.pcard .thumb .matchbadge {
+  position: absolute; top: 10px; right: 10px; display: flex; align-items: center; gap: 4px;
+  font-size: 10.5px; font-weight: 700; padding: 4px 9px 4px 7px; border-radius: 20px;
+  background: var(--brand); color: #fff;
+}
+.pcard .thumb .matchbadge .isvg { color: #fff; }
+.pcard .body { padding: 13px 15px 15px; flex: 1; display: flex; flex-direction: column; }
+.pcard .body h4 { font-size: 14.5px; font-weight: 700; letter-spacing: -.3px; line-height: 1.35; }
+.pcard .meta { font-size: 12px; color: var(--muted); margin-top: 7px; display: flex; gap: 6px; align-items: center; }
+.pcard .meta .isvg { color: var(--line2); }
+.pcard .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 13px; }
+/* 포인트 amber — 카드에서는 이 뱃지에서만 (절대 원칙 4) */
+.pcard .pt { display: flex; align-items: center; gap: 4px; font-weight: 800; color: var(--amber); font-size: 14px; }
+.pcard .pt em { font-size: 11px; color: var(--muted); font-weight: 600; font-style: normal; }
+
+.join-btn { padding: 8px 14px; border-radius: 9px; background: var(--brand); color: #fff; font-weight: 700; font-size: 12.5px; transition: .15s; }
+.join-btn:hover:not(:disabled):not([aria-disabled='true']) { background: var(--brand-dk); }
+/* aria-disabled 도 함께 받는다 — ProgramCard 는 클릭을 부모(팝업 열기)로 흘려보내려고 disabled 대신
+   aria-disabled 를 쓴다. 시각적 비활성은 동일하되 cursor 는 pointer 를 유지한다(누르면 상세가 열리므로). */
+.join-btn:disabled { background: var(--bg2); color: var(--muted); cursor: not-allowed; }
+.join-btn[aria-disabled='true'] { background: var(--bg2); color: var(--muted); }
+/* '전체 보기 →' — 프로토타입 인라인 스타일(578줄)을 클래스로 */
+.join-btn.seeall { background: var(--bg2); color: var(--ink2); }
+.join-btn.seeall:hover { background: var(--line); }

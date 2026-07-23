@@ -88,7 +88,9 @@ export default function StudentProgramsPage() {
     const today = todayISO(); // 로컬(KST) 기준. toISOString()은 오전 9시 이전에 하루 밀린다.
 
     // 검색 대상은 제목 + 주최 + 카테고리 표시명 (프로토타입 905줄). 설명은 대상이 아니다.
-    const match = (p) => !q || `${p.title}${p.org}${catOf(p.category).name}`.toLowerCase().includes(q);
+    // 줄바꿈으로 잇는다 — 그냥 이어붙이면 제목 끝과 주최 시작에 걸친 문자열이 우연히 매칭되는 오탐이 난다.
+    const match = (p) =>
+      !q || [p.title, p.org, catOf(p.category).name].join('\n').toLowerCase().includes(q);
     const trackOk = (p) => trackFilter === 'all' || p.career_track === trackFilter;
 
     const visible = programs.filter((p) => match(p) && trackOk(p));
@@ -122,9 +124,11 @@ export default function StudentProgramsPage() {
   }, [programs, query, sortMode, typeFilter, trackFilter]);
 
   // 빈 상태 문구 (프로토타입 939줄 카피). 선택한 조건을 ` · `로 연결해 앞에 붙인다.
+  // 유형은 칩 라벨과 같은 `그룹 이름` 형태로 — CAT 에 '대회'(hdc/edc)와 '기타'(het/eet)가 각각 둘씩 있어
+  // 이름만 쓰면 어느 칩을 눌렀는지 문구로 구분되지 않는다.
   const emptyCond = [
     query.trim() && `'${query.trim()}'`,
-    typeFilter !== 'all' && CAT[typeFilter]?.name,
+    typeFilter !== 'all' && CAT[typeFilter] && `${CAT[typeFilter].group} ${CAT[typeFilter].name}`,
     trackFilter !== 'all' && TRACK[trackFilter]?.name,
   ].filter(Boolean);
 
